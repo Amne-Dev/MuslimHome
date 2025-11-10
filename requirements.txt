@@ -1,0 +1,6 @@
+PyQt5>=5.15
+requests>=2.31
+pytz>=2023.3
+apscheduler>=3.10
+tzlocal>=5.0
+playsound3>=2.2

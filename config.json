@@ -1,0 +1,28 @@
+{
+  "language": "en",
+  "auto_location": false,
+  "location": {
+    "city": "Meknes",
+    "country": "Morocco",
+    "latitude": 33.895,
+    "longitude": -5.5547,
+    "timezone": "Africa/Casablanca",
+    "country_code": "MA"
+  },
+  "launch_on_startup": false,
+  "adhan": {
+    "full_prayer": "assets/adhan_full.mp3",
+    "short_prayer": "assets/adhan_full.mp3",
+    "use_short_for": [
+      "Fajr",
+      "Dhuhr",
+      "Isha",
+      "Asr",
+      "Maghrib"
+    ]
+  },
+  "calculation": {
+    "method": 3,
+    "school": 0
+  }
+}
