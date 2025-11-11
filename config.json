@@ -1,17 +1,14 @@
 {
-  "language": "ar",
-  "theme": "light",
+  "language": "en",
+  "theme": "system",
   "auto_location": true,
   "launch_on_startup": false,
   "adhan": {
     "full_prayer": "assets/adhan_full.mp3",
-    "short_prayer": "assets/adhan_full.mp3",
+    "short_prayer": "assets/adhan_short.mp3",
     "use_short_for": [
-      "Fajr",
       "Dhuhr",
-      "Isha",
-      "Asr",
-      "Maghrib"
+      "Asr"
     ]
   },
   "calculation": {
@@ -19,17 +16,17 @@
     "school": 0
   },
   "quran_bookmark": {
-    "surah": 24,
-    "ayah": 50,
-    "surah_name": "An-Nur",
-    "surah_name_ar": "\u0627\u0644\u0646\u0648\u0631"
+    "surah": 1,
+    "ayah": 1,
+    "surah_name": "Al-Fatiha",
+    "surah_name_ar": "\u0627\u0644\u0641\u0627\u062a\u062d\u0629"
   },
-  "onboarding_complete": true,
+  "onboarding_complete": false,
   "location": {
-    "city": "Tangier",
-    "country": "MA",
-    "latitude": 35.7673,
-    "longitude": -5.7998,
-    "timezone": "Africa/Casablanca"
+    "city": "",
+    "country": "",
+    "latitude": null,
+    "longitude": null,
+    "timezone": null
   }
 }

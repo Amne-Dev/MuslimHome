@@ -8,6 +8,39 @@
     "home_next_prayer_placeholder": "Prayer schedule unavailable.",
     "home_weather_title": "Current Weather",
     "home_weather_placeholder": "Weather information currently unavailable.",
+    "home_inspiration_title": "Daily Inspiration",
+    "home_inspiration_placeholder": "A daily verse or hadith will appear here once available.",
+    "home_inspiration_copy": "Copy",
+    "home_inspiration_share": "Share",
+    "home_progress_title": "Today's Prayers",
+    "home_progress_placeholder": "Prayer progress will appear once times are available.",
+    "home_progress_summary": "{completed}/{total} completed",
+    "home_weekly_title": "Weekly Overview",
+    "home_weekly_placeholder": "Weekly timetable will appear once prayer times load.",
+    "home_weekly_toggle_show": "Show timetable",
+    "home_weekly_toggle_hide": "Hide timetable",
+    "home_inspirations": [
+      {
+        "text": "Indeed, in the remembrance of Allah do hearts find rest.",
+        "reference": "Qur'an 13:28"
+      },
+      {
+        "text": "Whoever does not thank people has not thanked Allah.",
+        "reference": "Tirmidhi"
+      },
+      {
+        "text": "So be patient. Indeed, the promise of Allah is truth.",
+        "reference": "Qur'an 30:60"
+      },
+      {
+        "text": "The best of you are those who learn the Qur'an and teach it.",
+        "reference": "Bukhari"
+      },
+      {
+        "text": "And whoever relies upon Allah - then He is sufficient for him.",
+        "reference": "Qur'an 65:3"
+      }
+    ],
     "next_prayer": "Next Prayer",
     "prayer_now": "Now",
     "prayer_passed": "Completed",
@@ -32,6 +65,10 @@
     "settings_saved": "Settings updated.",
     "settings_applying": "Applying settings...",
     "settings_error": "Unable to apply settings. Please try again.",
+  "adhan_notification_title": "Time for {prayer}",
+  "adhan_notification_body": "It's time for {prayer}.",
+  "adhan_notification_snooze": "Snooze",
+  "adhan_notification_dismiss": "Dismiss",
     "startup_unsupported": "Startup toggle is not supported on this system.",
     "prayer_tab_title": "Prayers",
     "nav_home": "Home",
@@ -78,7 +115,7 @@
     "quran_loading": "Loading surah...",
     "quran_error": "Unable to load this surah.",
     "quran_error_detail": "Unable to load this surah. Please check your connection and try again.",
-  "quran_back": "Back",
+    "quran_back": "Back",
     "prayers": {
       "Fajr": "Fajr",
       "Dhuhr": "Dhuhr",
@@ -96,6 +133,39 @@
     "home_next_prayer_placeholder": "جدول الصلاة غير متوفر.",
     "home_weather_title": "الطقس الحالي",
     "home_weather_placeholder": "معلومات الطقس غير متاحة حالياً.",
+    "home_inspiration_title": "إلهام اليوم",
+    "home_inspiration_placeholder": "سيظهر هنا حديث أو آية يومية عند توفرها.",
+    "home_inspiration_copy": "نسخ",
+    "home_inspiration_share": "مشاركة",
+    "home_progress_title": "صلوات اليوم",
+    "home_progress_placeholder": "سيتم عرض التقدم في الصلوات عند توفر الأوقات.",
+    "home_progress_summary": "{completed}/{total} مكتملة",
+    "home_weekly_title": "عرض الأسبوع",
+    "home_weekly_placeholder": "سيظهر جدول الأسبوع عند تحميل أوقات الصلاة.",
+    "home_weekly_toggle_show": "إظهار الجدول",
+    "home_weekly_toggle_hide": "إخفاء الجدول",
+    "home_inspirations": [
+      {
+        "text": "ألا بذكر الله تطمئن القلوب",
+        "reference": "القرآن ٢٨:١٣"
+      },
+      {
+        "text": "من لا يشكر الناس لا يشكر الله",
+        "reference": "الترمذي"
+      },
+      {
+        "text": "فاصبر إن وعد الله حق",
+        "reference": "القرآن ٦٠:٣٠"
+      },
+      {
+        "text": "خيركم من تعلم القرآن وعلمه",
+        "reference": "البخاري"
+      },
+      {
+        "text": "ومن يتوكل على الله فهو حسبه",
+        "reference": "القرآن ٣:٦٥"
+      }
+    ],
     "next_prayer": "الصلاة التالية",
     "prayer_now": "الآن",
     "prayer_passed": "انتهت",
@@ -120,6 +190,10 @@
     "settings_saved": "تم تحديث الإعدادات.",
     "settings_applying": "جاري تطبيق الإعدادات...",
     "settings_error": "تعذّر تطبيق الإعدادات. حاول مرة أخرى.",
+  "adhan_notification_title": "حان وقت {prayer}",
+  "adhan_notification_body": "حان وقت صلاة {prayer}.",
+  "adhan_notification_snooze": "غفوة",
+  "adhan_notification_dismiss": "إغلاق",
     "startup_unsupported": "لا يمكن تغيير إعداد التشغيل التلقائي على هذا النظام.",
     "prayer_tab_title": "الصلوات",
     "nav_home": "الرئيسية",
@@ -166,7 +240,7 @@
     "quran_loading": "جارٍ تحميل السورة...",
     "quran_error": "تعذّر تحميل السورة.",
     "quran_error_detail": "تعذّر تحميل السورة. تحقق من الاتصال بالإنترنت وحاول مرة أخرى.",
-  "quran_back": "رجوع",
+    "quran_back": "رجوع",
     "prayers": {
       "Fajr": "الفجر",
       "Dhuhr": "الظهر",

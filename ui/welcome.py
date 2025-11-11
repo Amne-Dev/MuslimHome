@@ -279,6 +279,10 @@ class WelcomeDialog(QtWidgets.QDialog):
                     color: #fca5a5;
                 }
 
+                QGroupBox QLabel {
+                    color: #dbeafe;
+                }
+
                 QGroupBox {
                     border: 1px solid #1f3452;
                     border-radius: 16px;
@@ -294,6 +298,19 @@ class WelcomeDialog(QtWidgets.QDialog):
 
                 QRadioButton {
                     spacing: 10px;
+                    color: #f1f5ff;
+                }
+
+                QRadioButton::indicator {
+                    width: 18px;
+                    height: 18px;
+                    border: 2px solid #38d0a5;
+                    border-radius: 10px;
+                    background-color: transparent;
+                }
+
+                QRadioButton::indicator:checked {
+                    background-color: #38d0a5;
                 }
 
                 QComboBox#welcomeLanguageCombo,

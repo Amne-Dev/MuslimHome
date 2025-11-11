@@ -158,6 +158,7 @@ class PrayerApp(QtWidgets.QApplication):
         self.current_location: Optional[LocationInfo] = build_location_from_config(self._config)
         self.current_weather: Optional[WeatherInfo] = None
         self.current_forecast: List[DailyForecast] = []
+        self.weekly_schedule: List[Tuple[date, Dict[str, str]]] = []
         self.launch_on_startup = bool(self._config.get("launch_on_startup", False))
         self.theme_preference = str(self._config.get("theme", "system")).lower()
         if self.theme_preference not in {"light", "dark", "system"}:
@@ -165,6 +166,7 @@ class PrayerApp(QtWidgets.QApplication):
         self.active_theme = ""
         self._surah_cache: Dict[int, str] = {}
         self._pending_surah_number: Optional[int] = None
+        self.current_inspiration: Tuple[str, Optional[str]] = ("", None)
         LOGGER.debug(
             "Initial state -> language=%s auto_location=%s manual_location=%s",
             self.current_language,
@@ -176,7 +178,11 @@ class PrayerApp(QtWidgets.QApplication):
         full_path = APP_ROOT / str(adhan_cfg.get("full_prayer", "assets/adhan_full.mp3"))
         short_path = APP_ROOT / str(adhan_cfg.get("short_prayer", "assets/adhan_short.mp3"))
         self.use_short_for = set(adhan_cfg.get("use_short_for", []))
-        self.adhan_player = AdhanPlayer(str(full_path), str(short_path))
+        self.adhan_player = AdhanPlayer(str(full_path), str(short_path), parent=self)
+        self.adhan_player.playback_finished.connect(self._on_adhan_playback_finished)  # type: ignore
+        self._active_adhan_dialog: Optional[QtWidgets.QMessageBox] = None
+        self._active_prayer_code: Optional[str] = None
+        self._message_box_factory: Optional[Callable[[QtWidgets.QWidget], QtWidgets.QMessageBox]] = None
 
         calc_cfg = self._config.get("calculation", {}) if isinstance(self._config, dict) else {}
         method = int(calc_cfg.get("method", 3))
@@ -222,7 +228,7 @@ class PrayerApp(QtWidgets.QApplication):
         self.window.set_status(strings.get("updating", "Updating prayer times..."))
         LOGGER.debug("Refreshing prayer times (auto_location=%s)", self._config.get("auto_location", True))
 
-        def task() -> Tuple[PrayerDay, Optional[WeatherInfo], List[DailyForecast]]:
+        def task() -> Tuple[PrayerDay, Optional[WeatherInfo], List[DailyForecast], List[PrayerDay]]:
             LOGGER.debug("Refresh task started on worker thread")
             location = self._resolve_location()
             LOGGER.debug(
@@ -258,7 +264,17 @@ class PrayerApp(QtWidgets.QApplication):
                     weather_location.country,
                 )
 
-            return prayer_day, weather_info, forecast
+            upcoming_days: List[PrayerDay] = []
+            for offset in range(1, 7):
+                target_date = prayer_day.gregorian_date + timedelta(days=offset)
+                try:
+                    next_day = self.prayer_service.fetch_prayer_times(prayer_day.location, target_date=target_date)
+                except Exception:
+                    LOGGER.warning("Failed to fetch timetable for %s", target_date, exc_info=True)
+                    break
+                upcoming_days.append(next_day)
+
+            return prayer_day, weather_info, forecast, upcoming_days
 
         self._run_async(task, self._handle_refresh_success, self._handle_refresh_error)
 
@@ -298,12 +314,16 @@ class PrayerApp(QtWidgets.QApplication):
             return self.current_location
         raise RuntimeError("Manual location not configured")
 
-    def _handle_refresh_success(self, result: Tuple[PrayerDay, Optional[WeatherInfo], List[DailyForecast]]) -> None:
-        prayer_day, weather_info, forecast = result
+    def _handle_refresh_success(
+        self,
+        result: Tuple[PrayerDay, Optional[WeatherInfo], List[DailyForecast], List[PrayerDay]],
+    ) -> None:
+        prayer_day, weather_info, forecast, upcoming_days = result
         self.current_prayer_day = prayer_day
         self.current_location = prayer_day.location
         self.current_weather = weather_info
         self.current_forecast = forecast or []
+        self.weekly_schedule = self._build_weekly_schedule_rows(prayer_day, upcoming_days)
 
         strings = self._strings_for_language()
         LOGGER.info(
@@ -314,6 +334,8 @@ class PrayerApp(QtWidgets.QApplication):
         LOGGER.debug("Prayer schedule contains %d entries", len(prayer_day.prayers))
         self._render_current_prayer_day()
         self.window.set_status(strings.get("updated", "Prayer times updated."))
+        self.window.update_weekly_schedule(self.weekly_schedule)
+        self._deliver_inspiration(self.current_language)
 
         tzinfo = prayer_day.prayers[0].time.tzinfo
         timezone_name = getattr(tzinfo, "zone", None) or str(tzinfo)
@@ -348,11 +370,102 @@ class PrayerApp(QtWidgets.QApplication):
 
     def _on_prayer_trigger(self, prayer_name: str) -> None:
         LOGGER.info("Triggering Adhan for %s", prayer_name)
+        QtCore.QTimer.singleShot(0, lambda name=prayer_name: self._handle_prayer_trigger(name))
+
+    def _handle_prayer_trigger(self, prayer_name: str) -> None:
+        strings = self._strings_for_language()
+        prayer_map = strings.get("prayers") if isinstance(strings, dict) else {}
+        if not isinstance(prayer_map, dict):
+            prayer_map = {}
+
+        localized_name = str(prayer_map.get(prayer_name, prayer_name))
+        self._active_prayer_code = prayer_name
+
         use_short = prayer_name in self.use_short_for
+        audio_started = False
         try:
-            self.adhan_player.play(use_short=use_short)
+            audio_started = self.adhan_player.play(use_short=use_short)
         except Exception:
             LOGGER.exception("Failed to play Adhan audio")
+
+        self._show_adhan_notification(localized_name, strings, audio_started=audio_started)
+
+    def _show_adhan_notification(
+        self,
+        localized_prayer_name: str,
+        strings: Dict[str, Any],
+        *,
+        audio_started: bool,
+    ) -> None:
+        title_template = strings.get("adhan_notification_title", "Time for {prayer}")
+        body_template = strings.get("adhan_notification_body", "It's time for {prayer}.")
+        try:
+            title = str(title_template).format(prayer=localized_prayer_name)
+        except Exception:
+            title = f"Time for {localized_prayer_name}"
+        try:
+            body = str(body_template).format(prayer=localized_prayer_name)
+        except Exception:
+            body = f"It's time for {localized_prayer_name}."
+
+        self.window.set_status(body)
+
+        if self.tray_icon:
+            try:
+                self.tray_icon.showMessage(title, body, QtWidgets.QSystemTrayIcon.Information, 15_000)
+            except Exception:  # pragma: no cover - platform dependent
+                LOGGER.debug("Unable to show system tray notification", exc_info=True)
+
+        if self._active_adhan_dialog:
+            dialog = self._active_adhan_dialog
+            self._active_adhan_dialog = None
+            if dialog and dialog.isVisible():
+                dialog.close()
+
+        factory = getattr(self, "_message_box_factory", None)
+        if callable(factory):
+            box = factory(self.window)
+        else:
+            box = QtWidgets.QMessageBox(self.window)
+        box.setWindowTitle(title)
+        box.setText(body)
+        box.setIcon(QtWidgets.QMessageBox.Information)
+        box.setStandardButtons(QtWidgets.QMessageBox.NoButton)
+        box.setWindowModality(QtCore.Qt.NonModal)
+        box.setAttribute(QtCore.Qt.WA_DeleteOnClose)
+
+        snooze_label = strings.get("adhan_notification_snooze", "Snooze")
+        dismiss_label = strings.get("adhan_notification_dismiss", "Dismiss")
+        snooze_button = box.addButton(str(snooze_label), QtWidgets.QMessageBox.ActionRole)
+        box.addButton(str(dismiss_label), QtWidgets.QMessageBox.RejectRole)
+
+        def handle_click(button: QtWidgets.QAbstractButton) -> None:
+            if button is snooze_button:
+                self.adhan_player.stop()
+            box.close()
+
+        box.buttonClicked.connect(handle_click)  # type: ignore
+        box.destroyed.connect(self._on_adhan_dialog_destroyed)  # type: ignore
+        box.show()
+        box.raise_()
+        box.activateWindow()
+
+        self._active_adhan_dialog = box
+
+        if not audio_started:
+            LOGGER.warning("Adhan audio did not start; notification shown without sound")
+
+    def _on_adhan_playback_finished(self) -> None:
+        LOGGER.debug("Adhan playback finished")
+        self._active_prayer_code = None
+        dialog = self._active_adhan_dialog
+        if dialog:
+            self._active_adhan_dialog = None
+            if dialog.isVisible():
+                dialog.close()
+
+    def _on_adhan_dialog_destroyed(self, *_: object) -> None:
+        self._active_adhan_dialog = None
 
     # -- System tray and startup ---------------------------------------------
     def _setup_tray_icon(self) -> None:
@@ -548,6 +661,8 @@ class PrayerApp(QtWidgets.QApplication):
         prayer_map = strings.get("prayers", {}) if isinstance(strings, dict) else {}
         is_rtl = language_code.startswith("ar")
         self.window.apply_translations(strings, prayer_map, is_rtl)
+        self._deliver_inspiration(language_code)
+        self.window.update_weekly_schedule(self.weekly_schedule)
         self._update_tray_texts(strings)
         if self.current_prayer_day:
             self._render_current_prayer_day()
@@ -556,6 +671,33 @@ class PrayerApp(QtWidgets.QApplication):
         language_code = language_code or self.current_language
         LOGGER.debug("Fetching translations for language %s", language_code)
         return self._translations.get(language_code, self._translations.get("en", {}))
+
+    def _select_inspiration(self, language_code: str) -> Tuple[str, Optional[str]]:
+        strings = self._strings_for_language(language_code)
+        entries = strings.get("home_inspirations")
+        if not isinstance(entries, list) or not entries:
+            fallback = self._translations.get("en", {}).get("home_inspirations")
+            entries = fallback if isinstance(fallback, list) else []
+
+        if not entries:
+            return "", None
+
+        index = date.today().toordinal() % len(entries)
+        entry = entries[index] if index < len(entries) else entries[0]
+        if isinstance(entry, dict):
+            text = str(entry.get("text", "")).strip()
+            reference_raw = entry.get("reference")
+            reference = str(reference_raw).strip() if reference_raw else None
+            return text, reference
+
+        text = str(entry).strip()
+        return text, None
+
+    def _deliver_inspiration(self, language_code: str) -> None:
+        text, reference = self._select_inspiration(language_code)
+        self.current_inspiration = (text, reference)
+        if hasattr(self, "window"):
+            self.window.update_inspiration(text, reference)
 
     def _ensure_scheduler(self, timezone: str) -> None:
         if self.scheduler and self.scheduler.timezone == timezone:
@@ -727,6 +869,20 @@ class PrayerApp(QtWidgets.QApplication):
             raise RuntimeError("Surah text unavailable")
 
         return "<div class='surah-body' dir='rtl'>" + "".join(blocks) + "</div>"
+
+    def _build_weekly_schedule_rows(
+        self,
+        today: PrayerDay,
+        upcoming: List[PrayerDay],
+    ) -> List[Tuple[date, Dict[str, str]]]:
+        rows: List[Tuple[date, Dict[str, str]]] = []
+        days = [today] + list(upcoming)
+        base_date = today.gregorian_date
+        for index, entry in enumerate(days[:7]):
+            display_date = base_date + timedelta(days=index)
+            timings = {info.name: info.time.strftime("%H:%M") for info in entry.prayers}
+            rows.append((display_date, timings))
+        return rows
 
     def _render_current_prayer_day(self) -> None:
         if not self.current_prayer_day:
@@ -1136,6 +1292,7 @@ class PrayerApp(QtWidgets.QApplication):
         if self.scheduler:
             self.scheduler.shutdown()
         self._executor.shutdown(wait=False)
+        self.adhan_player.stop()
         if self.tray_icon:
             self.tray_icon.hide()
 

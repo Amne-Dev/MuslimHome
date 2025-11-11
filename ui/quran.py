@@ -506,10 +506,29 @@ class QuranPage(QtWidgets.QWidget):
         self.reading_text.setFont(font)
 
         palette = self.reading_text.palette()
-        text_color = palette.color(QtGui.QPalette.Text).name()
-        accent = "#15803d"
-        parchment = "#f9f1d6"
-        parchment_edge = "#e0cfa2"
+        base_color = palette.color(QtGui.QPalette.Text)
+        background_color = palette.color(QtGui.QPalette.Base)
+        is_dark_chrome = background_color.lightness() < 160
+        if is_dark_chrome:
+            text_color = "#f8fafc"
+            accent = "#38d0a5"
+            parchment = "#121c33"
+            parchment_edge = "#22324f"
+            placeholder_color = "#c7d2fe"
+            background_fill = (
+                "background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+                " stop:0 #0d1627, stop:1 #152342);"
+            )
+        else:
+            text_color = base_color.name()
+            accent = "#15803d"
+            parchment = "#f9f1d6"
+            parchment_edge = "#e0cfa2"
+            placeholder_color = "#64748b"
+            background_fill = (
+                "background: qradialgradient(cx:0.5, cy:0.5, radius:1, fx:0.5, fy:0.4,"
+                " stop:0 #fffdf4, stop:1 #f9f1d6);"
+            )
 
         family_candidates = [font.family()] + preferred_fonts + ["Scheherazade New", "Amiri Quran", "Traditional Arabic", "Arial"]
         # Preserve order while removing duplicates
@@ -541,8 +560,9 @@ class QuranPage(QtWidgets.QWidget):
             "}"
             ".placeholder {"
             " text-align: center;"
-            " opacity: 0.85;"
+            " opacity: 0.9;"
             " padding: 32px 0;"
+            f" color: {placeholder_color};"
             "}"
             "p.ayah {"
             " display: inline;"
@@ -592,7 +612,7 @@ class QuranPage(QtWidgets.QWidget):
         self.reading_text.document().setDefaultStyleSheet(stylesheet)
         self.reading_text.setStyleSheet(
             "QTextBrowser#quranText {"
-            f" background: qradialgradient(cx:0.5, cy:0.5, radius:1, fx:0.5, fy:0.4, stop:0 #fffdf4, stop:1 {parchment});"
+            f" {background_fill}"
             f" border: 2px solid {parchment_edge};"
             " border-radius: 18px;"
             " padding: 24px 18px;"

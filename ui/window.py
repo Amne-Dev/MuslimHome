@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import textwrap
-from datetime import datetime
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
+from datetime import datetime, date
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 ACCENT_COLOR_HEX = "#15803d"
 
@@ -37,6 +37,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
         self._prayer_info: Dict[str, PrayerInfo] = {}
         self._active_prayer: Optional[str] = None
         self._last_countdown_display: Optional[str] = None
+        self._weekly_schedule: List[Tuple[date, Dict[str, str]]] = []
 
         self.setObjectName("PrayerWindow")
         self.setWindowTitle("Prayer Times")
@@ -379,6 +380,13 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
     def display_quran_text(self, surah_number: int, text: Optional[str], error: Optional[str] = None) -> None:
         self.quran_page.update_surah_text(surah_number, text, error)
 
+    def update_inspiration(self, text: Optional[str], reference: Optional[str]) -> None:
+        self.home_page.update_inspiration(text, reference)
+
+    def update_weekly_schedule(self, schedule: Sequence[Tuple[date, Dict[str, str]]]) -> None:
+        self._weekly_schedule = list(schedule)
+        self.home_page.update_weekly_schedule(self._weekly_schedule, self.prayer_name_map)
+
     # -- UI updates -----------------------------------------------------------
     def apply_translations(
         self,
@@ -451,6 +459,8 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
         self._set_layout_direction(is_rtl)
         self._highlight_prayer(self._active_prayer)
         self._update_prayer_countdowns(None)
+        self._refresh_prayer_progress(None)
+        self.home_page.update_weekly_schedule(self._weekly_schedule, self.prayer_name_map)
 
     def update_location(self, city: str, country: str) -> None:
         self._last_location = (city, country)
@@ -490,6 +500,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
 
         self._highlight_prayer(self._active_prayer)
         self._update_prayer_countdowns(None)
+        self._refresh_prayer_progress(None)
 
     def update_next_prayer(
         self,
@@ -509,6 +520,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
         self._active_prayer = prayer_name
         self._highlight_prayer(prayer_name)
         self._update_prayer_countdowns(reference_time)
+        self._refresh_prayer_progress(reference_time)
 
         prayer_time_text = None
         if prayer_name and prayer_name in self._prayer_info:
@@ -648,6 +660,33 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 prefix = self.translations.get("until", "in")
                 countdown_label.setText(f"{prefix} {chunk}")
 
+    def _compute_prayer_progress(
+        self,
+        reference_time: Optional[datetime],
+    ) -> Tuple[int, int, Optional[str]]:
+        if not self._prayer_info:
+            return 0, 0, None
+
+        ordered = sorted(self._prayer_info.values(), key=lambda info: info.time)
+        tzinfo = ordered[0].time.tzinfo
+        if reference_time is None:
+            reference_time = datetime.now(tz=tzinfo) if tzinfo else datetime.now()
+
+        completed = [info for info in ordered if info.time <= reference_time]
+        total = len(ordered)
+        last_label: Optional[str] = None
+        if completed:
+            last_name = completed[-1].name
+            last_label = self.prayer_name_map.get(last_name, last_name)
+        return len(completed), total, last_label
+
+    def _refresh_prayer_progress(self, reference_time: Optional[datetime]) -> None:
+        completed, total, last_label = self._compute_prayer_progress(reference_time)
+        status_text = ""
+        if last_label and completed:
+            status_text = f"{self.translations.get('prayer_passed', 'Completed')}: {last_label}"
+        self.home_page.update_progress(completed, total, status_text or None)
+
     def apply_theme(self, theme: str) -> None:
         """Apply the selected theme stylesheet and refresh glyph colors."""
         if theme not in {"light", "dark"}:
@@ -742,6 +781,58 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                     border-radius: 20px;
                     border: 1px solid #1f3452;
                     box-shadow: 0 20px 40px rgba(9, 16, 32, 0.45);
+                }
+
+                QLabel#homeInspirationText {
+                    color: #f8fafc;
+                    font-size: 16px;
+                    line-height: 1.7;
+                }
+
+                QPushButton#homeActionButton,
+                QToolButton#homeActionButton {
+                    padding: 8px 18px;
+                    border-radius: 10px;
+                    border: 1px solid #1f3452;
+                    background-color: #13243d;
+                    color: #d7fee4;
+                    font-weight: 600;
+                }
+
+                QPushButton#homeActionButton:hover,
+                QToolButton#homeActionButton:hover {
+                    border-color: #38d0a5;
+                    background-color: #1b2d4a;
+                }
+
+                QToolButton#homeActionButton:checked {
+                    background-color: #15803d;
+                    border-color: #15803d;
+                    color: #ffffff;
+                }
+
+                QFrame#weeklyBody {
+                    border-top: 1px solid #1f3452;
+                    padding-top: 12px;
+                }
+
+                QTableWidget#weeklyTable {
+                    background-color: #0f1d32;
+                    border: 1px solid #1f3452;
+                    border-radius: 12px;
+                    color: #f1f5ff;
+                    gridline-color: rgba(56, 208, 165, 0.35);
+                }
+
+                QTableWidget#weeklyTable::item {
+                    padding: 6px;
+                }
+
+                QTableWidget#weeklyTable QHeaderView::section {
+                    background-color: #13243d;
+                    color: #d7fee4;
+                    border: none;
+                    padding: 6px;
                 }
 
                 QLabel#homeCardTitle {
@@ -1082,6 +1173,58 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 border-radius: 20px;
                 border: 1px solid #bbf7d0;
                 box-shadow: 0 18px 32px rgba(13, 148, 136, 0.08);
+            }
+
+            QLabel#homeInspirationText {
+                color: #0f172a;
+                font-size: 16px;
+                line-height: 1.7;
+            }
+
+            QPushButton#homeActionButton,
+            QToolButton#homeActionButton {
+                padding: 8px 18px;
+                border-radius: 10px;
+                border: 1px solid #bbf7d0;
+                background-color: #ffffff;
+                color: #14532d;
+                font-weight: 600;
+            }
+
+            QPushButton#homeActionButton:hover,
+            QToolButton#homeActionButton:hover {
+                border-color: #4ade80;
+                background-color: #f0fdf4;
+            }
+
+            QToolButton#homeActionButton:checked {
+                background-color: #15803d;
+                border-color: #15803d;
+                color: #ffffff;
+            }
+
+            QFrame#weeklyBody {
+                border-top: 1px solid #bbf7d0;
+                padding-top: 12px;
+            }
+
+            QTableWidget#weeklyTable {
+                background-color: #f8fafc;
+                border: 1px solid #bbf7d0;
+                border-radius: 12px;
+                color: #0f172a;
+                gridline-color: rgba(21, 128, 61, 0.15);
+            }
+
+            QTableWidget#weeklyTable::item {
+                padding: 6px;
+            }
+
+            QTableWidget#weeklyTable QHeaderView::section {
+                background-color: #ecfdf5;
+                color: #15803d;
+                border: none;
+                padding: 6px;
             }
 
             QLabel#homeCardTitle {

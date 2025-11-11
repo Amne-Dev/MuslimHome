@@ -6,12 +6,12 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 from location_catalog import LocationCatalog
 
 try:
-    from PyQt5 import QtCore, QtWidgets  # type: ignore
+    from PyQt5 import QtCore, QtGui, QtWidgets  # type: ignore
 except Exception:  # pragma: no cover - fallback path
     try:
-        from PySide2 import QtCore, QtWidgets  # type: ignore
+        from PySide2 import QtCore, QtGui, QtWidgets  # type: ignore
     except Exception:
-        from PySide6 import QtCore, QtWidgets  # type: ignore
+        from PySide6 import QtCore, QtGui, QtWidgets  # type: ignore
 
 
 class SettingsDialog(QtWidgets.QDialog):
@@ -295,6 +295,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._apply_theme(preview)
 
     def _apply_theme(self, theme: str) -> None:
+        self._theme = theme if theme in {"light", "dark"} else "light"
         if theme == "dark":
             self.setStyleSheet(
                 """
@@ -395,10 +396,12 @@ class SettingsDialog(QtWidgets.QDialog):
             )
             if hasattr(self, "footer_link"):
                 self.footer_link.setStyleSheet("color: #38d0a5; padding-top: 6px;")
+            self._apply_combo_palette(dark=True)
         else:
             self.setStyleSheet("")
             if hasattr(self, "footer_link"):
                 self.footer_link.setStyleSheet("color: #15803d; padding-top: 6px;")
+            self._apply_combo_palette(dark=False)
 
     def _refresh_countries(self) -> None:
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
@@ -453,3 +456,43 @@ class SettingsDialog(QtWidgets.QDialog):
 
         if not self.auto_location_checkbox.isChecked():
             self._populate_cities(target_index, current_city_name, force_refresh=True)
+
+    def _apply_combo_palette(self, *, dark: bool) -> None:
+        combos = [
+            getattr(self, "language_combo", None),
+            getattr(self, "theme_combo", None),
+            getattr(self, "country_combo", None),
+            getattr(self, "city_combo", None),
+        ]
+        combos = [combo for combo in combos if isinstance(combo, QtWidgets.QComboBox)]
+        if not combos:
+            return
+
+        if dark:
+            base = QtGui.QColor("#1b2d4a")
+            text = QtGui.QColor("#f1f5ff")
+            view_bg = "#111d33"
+            for combo in combos:
+                palette = QtGui.QPalette(combo.palette())
+                palette.setColor(QtGui.QPalette.Base, base)
+                palette.setColor(QtGui.QPalette.Window, base)
+                palette.setColor(QtGui.QPalette.Button, base)
+                palette.setColor(QtGui.QPalette.Text, text)
+                palette.setColor(QtGui.QPalette.ButtonText, text)
+                combo.setPalette(palette)
+                view = combo.view()
+                if view:
+                    view.setStyleSheet(
+                        f"QListView {{ background-color: {view_bg}; color: {text.name()}; selection-background-color: #15803d; selection-color: #ffffff; }}"
+                    )
+        else:
+            for combo in combos:
+                palette = QtGui.QPalette(self.style().standardPalette())
+                combo.setPalette(palette)
+                view = combo.view()
+                if view:
+                    view.setStyleSheet("")
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self._apply_theme(self._theme)
