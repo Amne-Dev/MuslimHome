@@ -4,7 +4,7 @@ Muslim Home is a friendly Windows desktop app that keeps you on time for every S
 
 ## Download & Install
 
-1. Visit the **Releases** page on GitHub and download the latest `MuslimHomeSetup.exe`.
+1. Download the latest installer: [MuslimHomeSetup.exe](https://github.com/Amne-Dev/Prayer/releases/latest/download/MuslimHomeSetup.exe).
 2. Run the installer (Windows may show a SmartScreen prompt—choose **More info → Run anyway**).
 3. The app installs to `C:\Program Files (x86)\Muslim Home` and adds shortcuts to the Start menu (desktop shortcut optional).
 4. Launch Muslim Home after installation; the onboarding screen will guide you through language and location choices.
@@ -24,6 +24,14 @@ Muslim Home is a friendly Windows desktop app that keeps you on time for every S
 - **Daily inspiration**: curated Qur’an verses with share/copy shortcuts.
 - **Light & dark themes**: follow Windows or pick your favourite.
 - **Bilingual UI**: instant switch between English and Arabic, with full RTL support.
+
+## Screenshots
+
+| English Home Page | Arabic Home Page |
+| --- | --- |
+| ![English Home](assets/screenshots/home-en.png) | ![Arabic Home](assets/screenshots/home-ar.png) |
+
+> _Screenshot placeholder:_ add the images to `assets/screenshots/home-en.png` and `assets/screenshots/home-ar.png` to display them on GitHub.
 
 ## Using Muslim Home
 
