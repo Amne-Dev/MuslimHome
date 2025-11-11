@@ -2,5 +2,6 @@
 
 from .window import PrayerTimesWindow
 from .settings import SettingsDialog
+from .quran import QuranPage
 
-__all__ = ["PrayerTimesWindow", "SettingsDialog"]
+__all__ = ["PrayerTimesWindow", "SettingsDialog", "QuranPage"]

@@ -19,6 +19,7 @@ from prayer_times import PrayerInfo
 from weather import DailyForecast, WeatherInfo
 from ui.home import HomePage
 from ui.weather import WeatherTab
+from ui.quran import QuranPage
 
 
 class PrayerTimesWindow(QtWidgets.QMainWindow):
@@ -71,10 +72,12 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
         self.home_page = self._build_home_page()
         self.prayer_page = self._build_prayer_page()
         self.weather_tab = WeatherTab()
+        self.quran_page = QuranPage()
 
         self.page_stack.addWidget(self.home_page)
         self.page_stack.addWidget(self.prayer_page)
         self.page_stack.addWidget(self.weather_tab)
+        self.page_stack.addWidget(self.quran_page)
         self._set_active_page(0)
 
         self.status_label = QtWidgets.QLabel()
@@ -101,6 +104,12 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
         self._language_handler: Optional[Callable[[], None]] = None
         self._settings_handler: Optional[Callable[[], None]] = None
 
+        self._bookmark_handler: Optional[Callable[[Optional[Dict[str, Any]]], None]] = None
+        self._surah_handler: Optional[Callable[[int], None]] = None
+
+        self.quran_page.bookmark_changed.connect(self._emit_quran_bookmark)  # type: ignore
+        self.quran_page.surah_selected.connect(self._emit_quran_surah_request)  # type: ignore
+
         self.apply_theme("light")
 
     # -- Builders -----------------------------------------------------------
@@ -118,6 +127,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
             (0, "nav_home", "Home", "home"),
             (1, "nav_prayers", "Prayers", "prayers"),
             (2, "nav_weather", "Weather", "weather"),
+            (3, "nav_quran", "Qur'an", "quran"),
         ]
 
         for index, translation_key, fallback, kind in buttons:
@@ -130,7 +140,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
             button.setMinimumHeight(110)
             button.setObjectName("NavButton")
             button.setCursor(QtCore.Qt.PointingHandCursor)
-            button.clicked.connect(lambda checked, idx=index: self._set_active_page(idx))  # type: ignore
+            button.pressed.connect(lambda idx=index: self._set_active_page(idx))  # type: ignore
 
             self._nav_group.addButton(button, index)
             self._nav_buttons[index] = button
@@ -189,7 +199,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
         return bar
 
     def _glyph_icon_for_nav(self, kind: str, color: Optional[QtGui.QColor] = None) -> QtGui.QIcon:
-        glyphs = {"home": "\u2302", "prayers": "\u262a", "weather": "\u2601"}
+        glyphs = {"home": "\u2302", "prayers": "\u262a", "weather": "\u2601", "quran": "\U0001F4D6"}
         glyph = glyphs.get(kind, "")
         if not glyph:
             return QtGui.QIcon()
@@ -317,9 +327,12 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
 
     def _set_active_page(self, index: int) -> None:
         self.page_stack.setCurrentIndex(index)
+        QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents)
         button = self._nav_buttons.get(index)
         if button and not button.isChecked():
             button.setChecked(True)
+        if self.page_stack.widget(index) is self.quran_page:
+            self.quran_page.ensure_default_selection()
 
     # -- Event handler wiring -------------------------------------------------
     def on_refresh(self, handler: Callable[[], None]) -> None:
@@ -330,6 +343,12 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
 
     def on_settings_open(self, handler: Callable[[], None]) -> None:
         self._settings_handler = handler
+
+    def on_quran_bookmark(self, handler: Callable[[Optional[Dict[str, Any]]], None]) -> None:
+        self._bookmark_handler = handler
+
+    def on_quran_surah_request(self, handler: Callable[[int], None]) -> None:
+        self._surah_handler = handler
 
     def _emit_refresh(self) -> None:
         if self._refresh_handler:
@@ -342,6 +361,23 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
     def _emit_open_settings(self) -> None:
         if self._settings_handler:
             self._settings_handler()
+
+    def _emit_quran_bookmark(self, bookmark: Optional[Dict[str, Any]]) -> None:
+        if self._bookmark_handler:
+            self._bookmark_handler(bookmark)
+
+    def set_quran_bookmark(self, bookmark: Optional[Dict[str, Any]]) -> None:
+        self.quran_page.set_bookmark(bookmark)
+
+    def _emit_quran_surah_request(self, surah_number: int) -> None:
+        if self._surah_handler:
+            self._surah_handler(surah_number)
+
+    def show_quran_loading(self, surah_number: int) -> None:
+        self.quran_page.show_surah_loading(surah_number)
+
+    def display_quran_text(self, surah_number: int, text: Optional[str], error: Optional[str] = None) -> None:
+        self.quran_page.update_surah_text(surah_number, text, error)
 
     # -- UI updates -----------------------------------------------------------
     def apply_translations(
@@ -373,10 +409,12 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
         self.language_button.setAccessibleName(language_text)
         self.home_page.apply_translations(translations)
         self.weather_tab.apply_translations(translations)
+        self.quran_page.apply_translations(translations)
 
         fallback_overrides = {
             1: translations.get("prayer_tab_title", "Prayers"),
             2: translations.get("weather_tab_title", "Weather"),
+            3: translations.get("quran_tab_title", "Qur'an"),
         }
         for index, (translation_key, fallback, _) in self._nav_items.items():
             button = self._nav_buttons.get(index)
@@ -617,23 +655,24 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
         self._theme = theme
         self.setStyleSheet(self._stylesheet_for_theme(theme))
         self._update_action_icons()
+        self.quran_page.refresh_reader_styles()
 
     def _update_action_icons(self) -> None:
         """Refresh action button glyphs so they stay legible per theme."""
         if not hasattr(self, "refresh_button"):
             return
 
-        nav_color = self._accent_color if self._theme == "light" else QtGui.QColor("#86efac")
+        nav_color = self._accent_color if self._theme == "light" else QtGui.QColor("#38d0a5")
         for index, button in self._nav_buttons.items():
             _, _, kind = self._nav_items.get(index, ("", "", ""))
             if not kind:
                 continue
             button.setIcon(self._glyph_icon_for_nav(kind, nav_color))
 
-        refresh_color = QtGui.QColor("#ffffff") if self._theme == "light" else QtGui.QColor("#f8fafc")
+        refresh_color = QtGui.QColor("#ffffff") if self._theme == "light" else QtGui.QColor("#f1f5ff")
         self.refresh_button.setIcon(self._create_glyph_icon("\u21bb", refresh_color, 28))
 
-        settings_color = self._accent_color if self._theme == "light" else QtGui.QColor("#86efac")
+        settings_color = self._accent_color if self._theme == "light" else QtGui.QColor("#38d0a5")
         self.settings_button.setIcon(self._create_glyph_icon("\u2699", settings_color, 26))
 
     def _stylesheet_for_theme(self, theme: str) -> str:
@@ -642,28 +681,28 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 """
                 QWidget {
                     font-family: 'Ubuntu', 'Segoe UI', sans-serif;
-                    color: #e2e8f0;
+                    color: #f1f5ff;
                 }
 
                 #PrayerWindow {
-                    background-color: #0f172a;
+                    background-color: #0b1628;
                 }
 
                 #NavBar {
-                    background-color: #152238;
+                    background-color: #111d33;
                     border-radius: 24px;
-                    border: 1px solid #1f3f2b;
+                    border: 1px solid #1f2f46;
                     padding: 16px 12px;
                 }
 
                 QWidget#NavActions {
-                    border-top: 1px solid #1f3f2b;
+                    border-top: 1px solid #1f2f46;
                     margin-top: 12px;
                     padding-top: 16px;
                 }
 
                 QToolButton#NavButton {
-                    color: #e2e8f0;
+                    color: #f1f5ff;
                     font-weight: 600;
                     padding: 12px 6px;
                     margin: 4px 0;
@@ -672,7 +711,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 }
 
                 QToolButton#NavButton:hover {
-                    background-color: #243447;
+                    background-color: #1b2d4a;
                 }
 
                 QToolButton#NavButton:checked {
@@ -686,23 +725,23 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 }
 
                 QLabel#dateLabel, QLabel#hijriLabel, QLabel#statusLabel, QLabel#observedAtLabel {
-                    color: #cbd5f5;
+                    color: #b7c3df;
                     font-size: 13px;
                 }
 
                 QLabel#nextPrayerLabel {
-                    color: #d1fae5;
+                    color: #d7fee4;
                     font-size: 14px;
                 }
 
                 QFrame#homeCard {
-                    background-color: #152238;
+                    background-color: #13243d;
                     border-radius: 20px;
-                    border: 1px solid #1f3f2b;
+                    border: 1px solid #1f3452;
                 }
 
                 QLabel#homeCardTitle {
-                    color: #34d399;
+                    color: #38d0a5;
                     font-size: 15px;
                     font-weight: 600;
                 }
@@ -714,13 +753,13 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 }
 
                 QLabel#homeCardSecondary {
-                    color: #bbf7d0;
+                    color: #d7fee4;
                     font-size: 16px;
                     font-weight: 600;
                 }
 
                 QLabel#homeCardCaption {
-                    color: #cbd5f5;
+                    color: #a9b7d6;
                     font-size: 12px;
                 }
 
@@ -739,14 +778,14 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 QPushButton#SecondaryButton {
                     padding: 10px 20px;
                     border-radius: 8px;
-                    border: 1px solid #1f3f2b;
-                    background-color: #152238;
-                    color: #e2e8f0;
+                    border: 1px solid #1f3452;
+                    background-color: #1b2d4a;
+                    color: #f1f5ff;
                     font-weight: 600;
                 }
 
                 QPushButton#SecondaryButton:hover {
-                    border-color: #34d399;
+                    border-color: #38d0a5;
                 }
 
                 QPushButton#GhostButton {
@@ -754,18 +793,18 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                     border-radius: 8px;
                     border: none;
                     background-color: transparent;
-                    color: #e2e8f0;
+                    color: #f1f5ff;
                     font-weight: 600;
                 }
 
                 QPushButton#GhostButton:hover {
-                    background-color: #243447;
+                    background-color: #1b2d4a;
                 }
 
                 QFrame#hijriCard {
-                    background-color: #152238;
+                    background-color: #13243d;
                     border-radius: 16px;
-                    border: 1px solid #1f3f2b;
+                    border: 1px solid #1f3452;
                     padding: 18px;
                 }
 
@@ -782,25 +821,25 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 }
 
                 QFrame#prayerCard {
-                    background-color: #152238;
+                    background-color: #13243d;
                     border-radius: 16px;
-                    border: 1px solid #1f3f2b;
+                    border: 1px solid #1f3452;
                     padding: 18px;
                 }
 
                 QFrame#prayerCard[state="active"] {
                     border-color: #15803d;
-                    box-shadow: 0px 8px 18px rgba(34, 197, 94, 0.45);
+                    box-shadow: 0px 8px 18px rgba(56, 208, 165, 0.55);
                 }
 
                 QLabel#prayerName {
                     font-size: 16px;
                     font-weight: 600;
-                    color: #e2e8f0;
+                    color: #f1f5ff;
                 }
 
                 QLabel#prayerName[active="true"] {
-                    color: #f8fafc;
+                    color: #d7fee4;
                 }
 
                 QLabel#prayerTime {
@@ -810,7 +849,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 }
 
                 QLabel#prayerCountdown {
-                    color: #cbd5f5;
+                    color: #a9b7d6;
                     font-size: 12px;
                 }
 
@@ -824,30 +863,30 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 }
 
                 QFrame#forecastCard {
-                    background-color: #152238;
+                    background-color: #13243d;
                     border-radius: 20px;
-                    border: 1px solid #1f3f2b;
+                    border: 1px solid #1f3452;
                 }
 
                 QFrame#forecastCard:hover {
-                    border-color: #34d399;
-                    box-shadow: 0px 8px 18px rgba(34, 197, 94, 0.45);
+                    border-color: #38d0a5;
+                    box-shadow: 0px 8px 18px rgba(56, 208, 165, 0.55);
                 }
 
                 QLabel#forecastIcon {
-                    background-color: #243447;
+                    background-color: #1b2d4a;
                     border-radius: 24px;
                     padding: 8px;
                 }
 
                 QLabel#forecastDay {
-                    color: #d1fae5;
+                    color: #d7fee4;
                     font-size: 14px;
                     font-weight: 600;
                 }
 
                 QLabel#forecastCondition {
-                    color: #cbd5f5;
+                    color: #b7c3df;
                     font-size: 12px;
                 }
 
@@ -858,14 +897,119 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 }
 
                 QLabel#forecastTitle {
-                    color: #e2e8f0;
+                    color: #f1f5ff;
                     font-size: 15px;
                     font-weight: 600;
                 }
 
                 QLabel#forecastPlaceholder {
-                    color: #cbd5f5;
+                    color: #b7c3df;
                     padding: 24px;
+                }
+
+                QFrame#quranCard {
+                    background-color: #13243d;
+                    border-radius: 20px;
+                    border: 1px solid #1f3452;
+                }
+
+                QWidget#quranReader {
+                    background-color: #0f1d32;
+                    border-radius: 20px;
+                    border: 1px solid #1f3452;
+                }
+
+                QListWidget#quranList {
+                    background-color: #0f1d32;
+                    border: 1px solid #1f3452;
+                    border-radius: 12px;
+                    padding: 8px;
+                    color: #f1f5ff;
+                }
+
+                QListWidget#quranList::item:selected {
+                    background-color: #15803d;
+                    color: #ffffff;
+                }
+
+                QListWidget#quranList::item:hover {
+                    background-color: #223759;
+                }
+
+                QLabel#quranHeader {
+                    color: #f8fafc;
+                }
+
+                QLabel#quranReadingTitle {
+                    color: #f8fafc;
+                }
+
+                QLabel#quranStatusLabel {
+                    color: #b7c3df;
+                }
+
+                QLabel#quranAyahLabel {
+                    color: #f1f5ff;
+                    font-weight: 600;
+                }
+
+                QPushButton#quranBackButton {
+                    padding: 8px 16px;
+                    border-radius: 10px;
+                    border: 1px solid #1f3452;
+                    background-color: #13243d;
+                    color: #f1f5ff;
+                    font-weight: 600;
+                }
+
+                QPushButton#quranBackButton:hover {
+                    border-color: #38d0a5;
+                    background-color: #1b2d4a;
+                }
+
+                QSpinBox#quranAyahSpinner {
+                    background-color: #1b2d4a;
+                    border: 1px solid #1f3452;
+                    border-radius: 8px;
+                    padding: 4px 8px;
+                    color: #f1f5ff;
+                }
+
+                QPushButton#quranSaveButton,
+                QPushButton#quranClearButton {
+                    padding: 10px 20px;
+                    border-radius: 8px;
+                    font-weight: 600;
+                }
+
+                QPushButton#quranSaveButton {
+                    background-color: #15803d;
+                    color: #f8fafc;
+                    border: none;
+                }
+
+                QPushButton#quranSaveButton:hover {
+                    background-color: #166534;
+                }
+
+                QPushButton#quranClearButton {
+                    background-color: transparent;
+                    color: #f1f5ff;
+                    border: 1px solid #1f3452;
+                }
+
+                QPushButton#quranClearButton:hover {
+                    border-color: #38d0a5;
+                }
+
+                QTextBrowser#quranText {
+                    background-color: #0f1d32;
+                    border: 1px solid #1f3452;
+                    border-radius: 12px;
+                    padding: 16px;
+                    color: #f1f5ff;
+                    font-size: 18px;
+                    line-height: 1.6;
                 }
                 """
             ).strip()
@@ -1097,6 +1241,111 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
             QLabel#forecastPlaceholder {
                 color: #6b7280;
                 padding: 24px;
+            }
+
+            QFrame#quranCard {
+                background-color: #ffffff;
+                border-radius: 20px;
+                border: 1px solid #bbf7d0;
+            }
+
+            QWidget#quranReader {
+                background-color: #ffffff;
+                border-radius: 20px;
+                border: 1px solid #bbf7d0;
+            }
+
+            QListWidget#quranList {
+                background-color: #f8fafc;
+                border: 1px solid #bbf7d0;
+                border-radius: 12px;
+                padding: 8px;
+                color: #0f172a;
+            }
+
+            QListWidget#quranList::item:selected {
+                background-color: #15803d;
+                color: #ffffff;
+            }
+
+            QListWidget#quranList::item:hover {
+                background-color: #bbf7d0;
+            }
+
+            QLabel#quranHeader {
+                color: #0f172a;
+            }
+
+            QLabel#quranReadingTitle {
+                color: #0f172a;
+            }
+
+            QLabel#quranStatusLabel {
+                color: #475569;
+            }
+
+            QLabel#quranAyahLabel {
+                color: #14532d;
+                font-weight: 600;
+            }
+
+            QPushButton#quranBackButton {
+                padding: 8px 16px;
+                border-radius: 10px;
+                border: 1px solid #bbf7d0;
+                background-color: #f8fafc;
+                color: #14532d;
+                font-weight: 600;
+            }
+
+            QPushButton#quranBackButton:hover {
+                border-color: #4ade80;
+                background-color: #e8fdf2;
+            }
+
+            QSpinBox#quranAyahSpinner {
+                background-color: #ffffff;
+                border: 1px solid #bbf7d0;
+                border-radius: 8px;
+                padding: 4px 8px;
+                color: #0f172a;
+            }
+
+            QPushButton#quranSaveButton,
+            QPushButton#quranClearButton {
+                padding: 10px 20px;
+                border-radius: 8px;
+                font-weight: 600;
+            }
+
+            QPushButton#quranSaveButton {
+                background-color: #15803d;
+                color: #ffffff;
+                border: none;
+            }
+
+            QPushButton#quranSaveButton:hover {
+                background-color: #166534;
+            }
+
+            QPushButton#quranClearButton {
+                background-color: transparent;
+                color: #14532d;
+                border: 1px solid #bbf7d0;
+            }
+
+            QPushButton#quranClearButton:hover {
+                border-color: #4ade80;
+            }
+
+            QTextBrowser#quranText {
+                background-color: #ffffff;
+                border: 1px solid #bbf7d0;
+                border-radius: 12px;
+                padding: 16px;
+                color: #0f172a;
+                font-size: 18px;
+                line-height: 1.6;
             }
             """
         ).strip()

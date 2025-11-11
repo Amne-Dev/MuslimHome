@@ -1,6 +1,6 @@
 {
-  "language": "ar",
-  "theme": "system",
+  "language": "en",
+  "theme": "light",
   "auto_location": false,
   "location": {
     "city": "Meknes",
@@ -25,5 +25,10 @@
   "calculation": {
     "method": 3,
     "school": 0
+  },
+  "quran_bookmark": {
+    "surah": 1,
+    "surah_name": "Al-Fatiha",
+    "ayah": 1
   }
 }

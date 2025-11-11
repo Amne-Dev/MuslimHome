@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import pytz
+import html
+import re
+import requests
 from tzlocal import get_localzone_name
 
 try:  # Prefer PyQt5, fall back to Qt for Python if available
@@ -42,7 +45,9 @@ from prayer_times import (
     detect_location_from_ip,
 )
 from scheduler import PrayerScheduler
+from location_catalog import LocationCatalog
 from ui import PrayerTimesWindow, SettingsDialog
+from ui.quran import SURAH_DATA
 from weather import WeatherInfo, WeatherService, DailyForecast
 
 APP_ROOT = Path(__file__).parent
@@ -84,6 +89,8 @@ AR_MONTHS = [
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 LOGGER = logging.getLogger(__name__)
+
+ARABIC_INDIC_DIGITS = ("٠", "١", "٢", "٣", "٤", "٥", "٦", "٧", "٨", "٩")
 
 
 class _AsyncDispatcher(QtCore.QObject):
@@ -137,12 +144,11 @@ class PrayerApp(QtWidgets.QApplication):
         self._executor = ThreadPoolExecutor(max_workers=2)
         self._config = self._load_json(CONFIG_PATH, default={})
         self._translations = self._load_json(TRANSLATIONS_PATH, default={})
-        self.location_catalog = self._load_location_catalog()
+        self.location_catalog = LocationCatalog(LOCATIONS_PATH)
         self._async_dispatchers: Set[_AsyncDispatcher] = set()
 
         LOGGER.debug("Loaded config keys: %s", list(self._config.keys()))
         LOGGER.debug("Languages available: %s", list(self._translations.keys()))
-        LOGGER.debug("Location catalog countries: %d", len(self.location_catalog))
 
         self.current_language = str(self._config.get("language", "en"))
         self.current_prayer_day: Optional[PrayerDay] = None
@@ -154,6 +160,8 @@ class PrayerApp(QtWidgets.QApplication):
         if self.theme_preference not in {"light", "dark", "system"}:
             self.theme_preference = "system"
         self.active_theme = ""
+        self._surah_cache: Dict[int, str] = {}
+        self._pending_surah_number: Optional[int] = None
         LOGGER.debug(
             "Initial state -> language=%s auto_location=%s manual_location=%s",
             self.current_language,
@@ -172,6 +180,7 @@ class PrayerApp(QtWidgets.QApplication):
         school = int(calc_cfg.get("school", 0))
         self.prayer_service = PrayerTimesService(method=method, school=school)
         self.weather_service = WeatherService()
+        self.quran_bookmark = self._normalize_quran_bookmark(self._config.get("quran_bookmark"))
 
         self.scheduler: Optional[PrayerScheduler] = None
         self.tray_icon: Optional[QtWidgets.QSystemTrayIcon] = None
@@ -187,6 +196,9 @@ class PrayerApp(QtWidgets.QApplication):
         self.window.on_refresh(self.refresh_prayer_times)
         self.window.on_language_toggle(self.toggle_language)
         self.window.on_settings_open(self.open_settings_dialog)
+        self.window.on_quran_bookmark(self._handle_quran_bookmark)
+        self.window.on_quran_surah_request(self._handle_quran_surah_request)
+        self.window.set_quran_bookmark(self.quran_bookmark)
         self.window.show()
 
         self._setup_tray_icon()
@@ -222,13 +234,26 @@ class PrayerApp(QtWidgets.QApplication):
 
             weather_info: Optional[WeatherInfo] = None
             forecast: List[DailyForecast] = []
-            if location.latitude is not None and location.longitude is not None:
+            weather_location = prayer_day.location
+            if weather_location.latitude is not None and weather_location.longitude is not None:
                 try:
-                    weather_info, forecast = self.weather_service.fetch_weather(location.latitude, location.longitude)
+                    weather_info, forecast = self.weather_service.fetch_weather(
+                        weather_location.latitude,
+                        weather_location.longitude,
+                    )
                 except Exception:  # pragma: no cover - network failure handled gracefully
-                    LOGGER.warning("Weather fetch failed for location %s, %s", location.city, location.country, exc_info=True)
+                    LOGGER.warning(
+                        "Weather fetch failed for location %s, %s",
+                        weather_location.city,
+                        weather_location.country,
+                        exc_info=True,
+                    )
             else:
-                LOGGER.debug("Skipping weather fetch due to missing coordinates for location %s, %s", location.city, location.country)
+                LOGGER.debug(
+                    "Skipping weather fetch due to missing coordinates for location %s, %s",
+                    weather_location.city,
+                    weather_location.country,
+                )
 
             return prayer_day, weather_info, forecast
 
@@ -557,6 +582,149 @@ class PrayerApp(QtWidgets.QApplication):
         LOGGER.debug("Persisting location config: %s", self._config.get("location"))
         self._save_json(CONFIG_PATH, self._config)
 
+    def _normalize_quran_bookmark(self, bookmark: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not isinstance(bookmark, dict):
+            return None
+        try:
+            surah_number = int(bookmark.get("surah", 0))
+        except (TypeError, ValueError):
+            return None
+        if surah_number < 1 or surah_number > len(SURAH_DATA):
+            return None
+
+        try:
+            ayah_number = int(bookmark.get("ayah", 1))
+        except (TypeError, ValueError):
+            ayah_number = 1
+        ayah_number = max(1, ayah_number)
+
+        surah_info = next((info for info in SURAH_DATA if info.number == surah_number), None)
+        if surah_info is None:
+            return None
+
+        surah_name = bookmark.get("surah_name")
+        if not isinstance(surah_name, str) or not surah_name.strip():
+            surah_name = surah_info.name
+
+        surah_name_ar = bookmark.get("surah_name_ar")
+        if not isinstance(surah_name_ar, str) or not surah_name_ar.strip():
+            surah_name_ar = surah_info.arabic_name
+
+        return {
+            "surah": surah_number,
+            "ayah": ayah_number,
+            "surah_name": surah_name,
+            "surah_name_ar": surah_name_ar,
+        }
+
+    def _handle_quran_bookmark(self, bookmark: Optional[Dict[str, Any]]) -> None:
+        normalized = self._normalize_quran_bookmark(bookmark)
+        strings = self._strings_for_language()
+
+        if normalized:
+            self.quran_bookmark = normalized
+            self._config["quran_bookmark"] = normalized
+            self._save_json(CONFIG_PATH, self._config)
+
+            template = strings.get("quran_bookmark_saved", "Bookmark saved for {surah} · Ayah {ayah}.")
+            if not isinstance(template, str):
+                template = "Bookmark saved for {surah} · Ayah {ayah}."
+            message = template.format(surah=normalized.get("surah_name"), ayah=normalized.get("ayah"))
+            self.window.set_status(message)
+        else:
+            self.quran_bookmark = None
+            if "quran_bookmark" in self._config:
+                self._config.pop("quran_bookmark", None)
+                self._save_json(CONFIG_PATH, self._config)
+
+            cleared = strings.get("quran_bookmark_cleared", "Bookmark cleared.")
+            if not isinstance(cleared, str):
+                cleared = "Bookmark cleared."
+            self.window.set_status(cleared)
+
+        self.window.set_quran_bookmark(self.quran_bookmark)
+
+    def _handle_quran_surah_request(self, surah_number: int) -> None:
+        if surah_number < 1 or surah_number > len(SURAH_DATA):
+            return
+
+        self._pending_surah_number = surah_number
+
+        cached = self._surah_cache.get(surah_number)
+        if cached is not None:
+            self.window.display_quran_text(surah_number, cached, None)
+            return
+
+        self.window.show_quran_loading(surah_number)
+
+        def task() -> str:
+            return self._download_surah_text(surah_number)
+
+        def on_success(text: str) -> None:
+            if self._pending_surah_number != surah_number:
+                return
+            self._surah_cache[surah_number] = text
+            self.window.display_quran_text(surah_number, text, None)
+
+        def on_error(exc: Exception) -> None:
+            if self._pending_surah_number != surah_number:
+                return
+            strings = self._strings_for_language()
+            message = strings.get("quran_error_detail", str(exc))
+            if not isinstance(message, str):
+                message = str(exc)
+            self.window.display_quran_text(surah_number, None, message)
+
+        self._run_async(task, on_success, on_error)
+
+    def _download_surah_text(self, surah_number: int) -> str:
+        endpoint = f"https://api.alquran.cloud/v1/surah/{surah_number}?edition=quran-uthmani"
+        try:
+            response = requests.get(endpoint, timeout=15)
+            response.raise_for_status()
+            payload = response.json()
+        except requests.RequestException as exc:
+            raise RuntimeError("Network request failed") from exc
+
+        if not isinstance(payload, dict) or payload.get("status") != "OK":
+            raise RuntimeError("Unexpected response from Qur'an service")
+
+        data = payload.get("data", {})
+        ayahs = data.get("ayahs", []) if isinstance(data, dict) else []
+        if not ayahs:
+            raise RuntimeError("Surah text unavailable")
+
+        return self._build_surah_html(surah_number, ayahs)
+
+    def _build_surah_html(self, surah_number: int, ayahs: List[Dict[str, Any]]) -> str:
+        blocks: List[str] = []
+        for index, ayah in enumerate(ayahs):
+            if not isinstance(ayah, dict):
+                continue
+            text = ayah.get("text")
+            if not isinstance(text, str):
+                continue
+
+            clean_text = re.sub(r"\u06dd[\u0660-\u0669]+", "", text).strip()
+            if not clean_text:
+                continue
+
+            try:
+                number_in_surah = int(ayah.get("numberInSurah", index + 1))
+            except (TypeError, ValueError):
+                number_in_surah = index + 1
+
+            digits = "".join(ARABIC_INDIC_DIGITS[int(d)] for d in str(abs(number_in_surah)))
+            classes = "ayah basmala" if index == 0 and surah_number != 9 else "ayah"
+            safe_text = html.escape(clean_text)
+            number_html = f"<span class='ayah-number'>{digits}</span>"
+            blocks.append(f"<p dir='rtl' class='{classes}'>{safe_text}{number_html}</p>")
+
+        if not blocks:
+            raise RuntimeError("Surah text unavailable")
+
+        return "<div class='surah-body' dir='rtl'>" + "".join(blocks) + "</div>"
+
     def _render_current_prayer_day(self) -> None:
         if not self.current_prayer_day:
             return
@@ -600,46 +768,21 @@ class PrayerApp(QtWidgets.QApplication):
         strings = self._strings_for_language()
         return strings.get("weather_tab_title", "Weather")
 
-    def _load_location_catalog(self) -> List[Dict[str, Any]]:
-        if not LOCATIONS_PATH.exists():
-            LOGGER.warning("Location catalog file not found at %s", LOCATIONS_PATH)
-            return []
-        try:
-            with LOCATIONS_PATH.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
-            LOGGER.debug("Location catalog raw payload keys: %s", list(payload.keys()))
-        except Exception:
-            LOGGER.exception("Failed to load location catalog")
-            return []
-
-        countries = payload.get("countries", [])
-        sanitized: List[Dict[str, Any]] = []
-        for entry in countries:
-            if not isinstance(entry, dict):
-                continue
-            name = entry.get("name")
-            if not name:
-                continue
-            code = entry.get("code") or name
-            cities = [city for city in entry.get("cities", []) if isinstance(city, dict) and city.get("name")]
-            sanitized.append({"name": name, "code": code, "cities": cities})
-            LOGGER.debug("Loaded country %s with %d cities", name, len(cities))
-        return sanitized
-
-    def _find_city_record(self, country_code: Optional[str], city_name: Optional[str]) -> Optional[Dict[str, Any]]:
+    def _find_city_record(
+        self,
+        country_code: Optional[str],
+        city_name: Optional[str],
+        country_name: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         if not city_name:
             LOGGER.debug("City lookup skipped because city_name is missing")
             return None
-        for country in self.location_catalog:
-            code = country.get("code")
-            if country_code and country_code not in (code, country.get("name")):
-                continue
-            for city in country.get("cities", []):
-                if city.get("name") == city_name:
-                    LOGGER.debug("Matched city %s in country %s", city_name, country.get("name"))
-                    return city
-        LOGGER.debug("City %s (country_code=%s) not found in catalog", city_name, country_code)
-        return None
+        record = self.location_catalog.city_record(country_code, country_name, city_name)
+        if record:
+            LOGGER.debug("Matched city %s (country=%s)", city_name, country_code or country_name)
+        else:
+            LOGGER.debug("City %s (country_code=%s) not found in catalog", city_name, country_code)
+        return record
 
     def _system_timezone(self) -> str:
         try:
@@ -732,6 +875,7 @@ class PrayerApp(QtWidgets.QApplication):
         if isinstance(self._config.get("location"), dict):
             initial_location_cfg = dict(self._config["location"])
 
+        countries = self.location_catalog.countries()
         dialog = SettingsDialog(
             self.window,
             strings,
@@ -745,7 +889,9 @@ class PrayerApp(QtWidgets.QApplication):
                 "location": initial_location_cfg,
             },
             prayer_labels,
+            countries,
             self.location_catalog,
+            theme=self.active_theme or "light",
         )
 
         if dialog.exec() != QtWidgets.QDialog.Accepted:
@@ -778,7 +924,11 @@ class PrayerApp(QtWidgets.QApplication):
                 )
                 return
 
-            city_record = self._find_city_record(desired_country_code, city_name)
+            city_record = self._find_city_record(
+                desired_country_code,
+                city_name,
+                desired_location_cfg.get("country"),
+            )
             if not city_record:
                 QtWidgets.QMessageBox.warning(
                     self.window,

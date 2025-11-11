@@ -6,6 +6,7 @@ A lightweight PyQt-based desktop application for Windows that displays Islamic d
 
 - Auto-detects user location via IP lookup with manual override.
 - Manual override accepts city/country with optional latitude/longitude/timezone for fine-grained control.
+- Settings dialog pulls the full list of AlAdhan-supported countries and cities with an offline fallback.
 - Fetches daily prayer times and Hijri date from the AlAdhan API.
 - Presents the five daily prayers in a simple table with the next prayer countdown.
 - Plays configurable Adhan audio clips (full or short) per prayer using `playsound3`.
