@@ -107,6 +107,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
 
         self._bookmark_handler: Optional[Callable[[Optional[Dict[str, Any]]], None]] = None
         self._surah_handler: Optional[Callable[[int], None]] = None
+        self._close_handler: Optional[Callable[[], bool]] = None
 
         self.quran_page.bookmark_changed.connect(self._emit_quran_bookmark)  # type: ignore
         self.quran_page.surah_selected.connect(self._emit_quran_surah_request)  # type: ignore
@@ -198,6 +199,21 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
         layout.addWidget(action_widget)
         self._update_action_icons()
         return bar
+
+    # ------------------------------------------------------------------
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
+        if self._close_handler is not None:
+            try:
+                should_close = self._close_handler()
+            except Exception:
+                should_close = True
+            if not should_close:
+                event.ignore()
+                return
+        super().closeEvent(event)
+
+    def on_close_attempt(self, handler: Callable[[], bool]) -> None:
+        self._close_handler = handler
 
     def _glyph_icon_for_nav(self, kind: str, color: Optional[QtGui.QColor] = None) -> QtGui.QIcon:
         glyphs = {"home": "\u2302", "prayers": "\u262a", "weather": "\u2601", "quran": "\U0001F4D6"}

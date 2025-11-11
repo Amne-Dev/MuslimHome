@@ -137,6 +137,7 @@ class PrayerApp(QtWidgets.QApplication):
     def __init__(self, argv: list[str]) -> None:
         super().__init__(argv)
         self.setApplicationName("Prayer Times")
+        self.setQuitOnLastWindowClosed(False)
 
         self._register_application_font()
         self.setFont(QtGui.QFont("Ubuntu", 10))
@@ -183,6 +184,8 @@ class PrayerApp(QtWidgets.QApplication):
         self._active_adhan_dialog: Optional[QtWidgets.QMessageBox] = None
         self._active_prayer_code: Optional[str] = None
         self._message_box_factory: Optional[Callable[[QtWidgets.QWidget], QtWidgets.QMessageBox]] = None
+        self._allow_window_close = False
+        self._tray_hint_shown = False
 
         calc_cfg = self._config.get("calculation", {}) if isinstance(self._config, dict) else {}
         method = int(calc_cfg.get("method", 3))
@@ -208,6 +211,7 @@ class PrayerApp(QtWidgets.QApplication):
         self.window.on_quran_bookmark(self._handle_quran_bookmark)
         self.window.on_quran_surah_request(self._handle_quran_surah_request)
         self.window.set_quran_bookmark(self.quran_bookmark)
+        self.window.on_close_attempt(self._handle_window_close)
         self.window.show()
 
         self._setup_tray_icon()
@@ -496,7 +500,7 @@ class PrayerApp(QtWidgets.QApplication):
 
         menu.addSeparator()
         self.tray_quit_action = menu.addAction("Quit")
-        self.tray_quit_action.triggered.connect(self.quit)  # type: ignore
+        self.tray_quit_action.triggered.connect(self._quit_from_tray)  # type: ignore
 
         tray.setContextMenu(menu)
         tray.setToolTip("Prayer Times")
@@ -516,6 +520,31 @@ class PrayerApp(QtWidgets.QApplication):
 
     def _hide_main_window(self) -> None:
         self.window.hide()
+
+    def _handle_window_close(self) -> bool:
+        if not self.tray_icon or not QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
+            return True
+        if self._allow_window_close:
+            return True
+
+        self.window.hide()
+        if not self._tray_hint_shown:
+            strings = self._strings_for_language()
+            title = strings.get("tray_minimize_title", "Prayer Times is still running")
+            message = strings.get(
+                "tray_minimize_message",
+                "Prayer Times will keep running in the system tray. Use the tray icon to reopen or quit.",
+            )
+            try:
+                self.tray_icon.showMessage(title, message, QtWidgets.QSystemTrayIcon.Information, 5000)
+            except Exception:
+                LOGGER.debug("System tray minimize hint failed", exc_info=True)
+            self._tray_hint_shown = True
+        return False
+
+    def _quit_from_tray(self) -> None:
+        self._allow_window_close = True
+        self.quit()
 
     def toggle_startup_launch(self) -> None:
         desired = not self.launch_on_startup
@@ -1295,6 +1324,7 @@ class PrayerApp(QtWidgets.QApplication):
         self.adhan_player.stop()
         if self.tray_icon:
             self.tray_icon.hide()
+        self._allow_window_close = True
 
 
 def main() -> int:
