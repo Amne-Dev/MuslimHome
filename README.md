@@ -31,7 +31,6 @@ Muslim Home is a friendly Windows desktop app that keeps you on time for every S
 | --- | --- |
 | ![English Home](assets/screenshots/home-en.png) | ![Arabic Home](assets/screenshots/home-ar.png) |
 
-> _Screenshot placeholder:_ add the images to `assets/screenshots/home-en.png` and `assets/screenshots/home-ar.png` to display them on GitHub.
 
 ## Using Muslim Home
 
