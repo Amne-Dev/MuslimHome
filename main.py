@@ -8,6 +8,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, time as time_module
 from pathlib import Path
+import shutil
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import pytz
@@ -51,7 +52,22 @@ from ui.quran import SURAH_DATA
 from weather import WeatherInfo, WeatherService, DailyForecast
 
 APP_ROOT = Path(__file__).parent
-CONFIG_PATH = APP_ROOT / "config.json"
+
+
+def _config_storage_path() -> Path:
+    if getattr(sys, "frozen", False):
+        try:
+            base = QtCore.QStandardPaths.writableLocation(QtCore.QStandardPaths.AppDataLocation)
+        except Exception:
+            base = ""
+        if base:
+            return Path(base) / "config.json"
+        return Path.home() / "AppData" / "Local" / "MuslimHome" / "config.json"
+    return Path(__file__).parent / "config.json"
+
+
+DEFAULT_CONFIG_PATH = APP_ROOT / "config.json"
+CONFIG_PATH = _config_storage_path()
 TRANSLATIONS_PATH = APP_ROOT / "translations.json"
 LOCATIONS_PATH = APP_ROOT / "assets" / "locations.json"
 STARTUP_REGISTRY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -142,6 +158,8 @@ class PrayerApp(QtWidgets.QApplication):
         self._register_application_font()
         self.setFont(QtGui.QFont("Ubuntu", 10))
 
+        self._prepare_config_storage()
+
         self._executor = ThreadPoolExecutor(max_workers=2)
         self._config = self._load_json(CONFIG_PATH, default={})
         self._translations = self._load_json(TRANSLATIONS_PATH, default={})
@@ -225,6 +243,26 @@ class PrayerApp(QtWidgets.QApplication):
         self._apply_language(self.current_language)
         self._apply_startup_setting(self.launch_on_startup)
         QtCore.QTimer.singleShot(100, self.refresh_prayer_times)
+
+    # ------------------------------------------------------------------
+    def _prepare_config_storage(self) -> None:
+        if CONFIG_PATH == DEFAULT_CONFIG_PATH:
+            return
+
+        config_dir = CONFIG_PATH.parent
+        try:
+            config_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            LOGGER.exception("Unable to create config directory %s", config_dir, exc_info=True)
+            return
+
+        if not CONFIG_PATH.exists():
+            try:
+                shutil.copy2(DEFAULT_CONFIG_PATH, CONFIG_PATH)
+            except Exception:
+                LOGGER.warning("Failed to seed config from default; writing fallback.", exc_info=True)
+                defaults = self._load_json(DEFAULT_CONFIG_PATH, default={})
+                self._save_json(CONFIG_PATH, defaults)
 
     # ------------------------------------------------------------------
     def refresh_prayer_times(self) -> None:
@@ -1314,6 +1352,7 @@ class PrayerApp(QtWidgets.QApplication):
 
     @staticmethod
     def _save_json(path: Path, payload: Dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
 
