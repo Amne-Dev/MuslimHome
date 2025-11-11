@@ -1,94 +1,90 @@
-# Prayer Times MVP
+# Muslim Home – Prayer Times Companion
 
-A lightweight PyQt-based desktop application for Windows that displays Islamic daily prayer times, supports bilingual (English/Arabic) UI, and plays Adhan audio at the scheduled prayer times.
+Muslim Home is a friendly Windows desktop app that keeps you on time for every Salah. Install it once, let it live in the system tray, and enjoy clear schedules, Adhan reminders, and a beautiful bilingual experience tailored to your day.
 
-## Features
+## Download & Install
 
-- Auto-detects user location via IP lookup with manual override.
-- Manual override accepts city/country with optional latitude/longitude/timezone for fine-grained control.
-- Settings dialog pulls the full list of AlAdhan-supported countries and cities with an offline fallback.
-- Fetches daily prayer times and Hijri date from the AlAdhan API.
-- Presents the five daily prayers in a simple table with the next prayer countdown.
-- Plays configurable Adhan audio clips (full or short) per prayer via Qt Multimedia with in-app Snooze notifications.
-- Scheduler runs in the background to trigger Adhan playback and daily refresh.
-- System tray icon for quick show/hide, refresh, and startup toggle actions.
-- Optional launch-on-startup setting managed through the tray menu (Windows).
-- Toggle between English and Arabic translations, including RTL layout for Arabic.
-- Switch between light and dark themes or follow the system theme from the Settings dialog.
+1. Visit the **Releases** page on GitHub and download the latest `MuslimHomeSetup.exe`.
+2. Run the installer (Windows may show a SmartScreen prompt—choose **More info → Run anyway**).
+3. The app installs to `C:\Program Files (x86)\Muslim Home` and adds shortcuts to the Start menu (desktop shortcut optional).
+4. Launch Muslim Home after installation; the onboarding screen will guide you through language and location choices.
 
-## Project Structure
+### System Requirements
 
-```
-project-root/
-├── main.py            # Application entry point
-├── ui.py              # PyQt window + dialogs
-├── prayer_times.py    # API integration and location helpers
-├── adhan_player.py    # Audio playback wrapper
-├── scheduler.py       # APScheduler integration
-├── translations.json  # UI translations (English/Arabic)
-├── config.json        # User preferences and defaults
-├── requirements.txt   # Python dependencies
-└── assets/
-    ├── README.txt     # Instructions for Adhan audio assets
-    ├── adhan_full.mp3 # (Place your file here)
-    └── adhan_short.mp3
-```
+- Windows 10 or 11 (64-bit recommended)
+- Internet access for initial setup and daily schedule/ weather updates
+- Audio device for Adhan playback (optional but encouraged!)
 
-## Getting Started
+## What You Get
 
-1. Create/activate a virtual environment:
-   ```powershell
-   py -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   ```
+- **Prayer schedules**: real-time daily times plus a seven-day timetable view.
+- **Adhan notifications**: full or short audio per prayer, snooze/dismiss buttons, and tray alerts.
+- **Smart location**: automatic detection with easy manual override using an offline city catalog.
+- **Weather glance**: current conditions and a five-day forecast for your location.
+- **Daily inspiration**: curated Qur’an verses with share/copy shortcuts.
+- **Light & dark themes**: follow Windows or pick your favourite.
+- **Bilingual UI**: instant switch between English and Arabic, with full RTL support.
 
-2. Install dependencies:
-   ```powershell
-   pip install -r requirements.txt
-   ```
+## Using Muslim Home
 
-3. Add your Adhan audio files to the `assets/` directory and ensure the paths in `config.json` match.
+### Tray Controls
 
-4. Run the application:
-   ```powershell
-   python main.py
-   ```
+- Closed windows keep the app running in the tray. Double-click the tray icon to reopen it.
+- Right-click the tray icon for quick actions: show/hide, refresh schedules, toggle launch on startup, or quit.
 
-## Configuration
+### Settings Overview
 
-- `config.json`
-  - `language`: default UI language (`"en"` or `"ar"`).
-- `theme`: preferred color theme (`"light"`, `"dark"`, or `"system"` to follow the OS).
-  - `auto_location`: when `true`, the app uses IP-based geolocation each refresh.
-  - `launch_on_startup`: enable (`true`) or disable (`false`) registration with Windows startup.
-  - `location`: fallback/manual location data (city, country, latitude, longitude, timezone). Only `city` and `country` are required; the rest are optional.
-  - `adhan`: configure audio file paths and prayers that use the short Adhan.
-  - `calculation`: controls the AlAdhan computation method and school.
+- **Language & Theme**: switch any time via the sidebar or tray.
+- **Location**: stay on auto-detect or choose a specific city/country. Advanced users can enter latitude/longitude/timezone for precise adjustments.
+- **Adhan**: decide which prayers use the short clip, change audio files, or mute entirely.
+- **Prayers**: view calculation method and madhhab; update if you follow a different convention.
+- **Qur’an bookmark**: save your place and jump straight back to it.
 
-## Testing
+### Weekly Timetable
 
-1. Install development dependencies:
-   ```powershell
-   pip install -r requirements-dev.txt
-   ```
+Expand the timetable card on the Home page to preview the next seven days. Dates and day names adapt to the selected language, and the tile highlights the current day.
 
-2. Run the test suite:
-   ```powershell
-   pytest
-   ```
+## Tips & Troubleshooting
 
-The included tests validate location handling and API integrations via mocked responses.
+- **Missed onboarding?** Reset from Settings → General → “Restart welcome tour.”
+- **Audio not playing?** Ensure your sound device is active and volume is up. The tray menu can pause/resume Adhan playback.
+- **Manual location blank?** Start typing the country; once selected, the city dropdown fills automatically.
+- **Startup toggle not sticking?** Windows may block startup entries in managed environments; check if your account has permission to add startup apps.
+- **Config location:** User preferences live in `%APPDATA%\Muslim Home\config.json`. Delete that file to reset the app to defaults.
 
-## Packaging (Optional)
+## Stay Updated
 
-You can build a Windows executable with PyInstaller:
+- Check GitHub Releases for new builds and changelog notes.
+- Enable **Watch → Releases only** on the repo to get notified automatically.
+
+## Need Help?
+
+- Open an issue on GitHub with steps to reproduce the problem.
+- Include logs from `%APPDATA%\Muslim Home\logs` (if present) and your Windows version.
+- Feature ideas welcome! Let us know what would make Muslim Home even more useful.
+
+---
+
+_May this companion help you stay mindful of Salah and bring barakah into your digital routine._
+
+---
+
+<details>
+<summary>Developer Notes</summary>
+
+Muslim Home is built with Python 3.12, PyQt5, APScheduler, and PyInstaller. To run from source:
+
 ```powershell
-pyinstaller --name PrayerTimes --onefile main.py
+git clone https://github.com/<your-account>/Prayer.git
+cd Prayer
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python main.py
 ```
-Adjust spec files/assets as needed to bundle translations and audio files.
 
-## Notes
+Run tests with `pip install -r requirements-dev.txt` followed by `pytest`.
 
-- Ensure outbound HTTPS access so the app can call the AlAdhan and ipinfo APIs.
-- Manual location entry requires city and country; coordinates/timezone are optional and can be refined later.
-- The scheduler uses the timezone returned by the API; update the configuration if you move between timezones.
+Packaging uses PyInstaller (app build) + Inno Setup (installer). Mutable configs are stored in `%APPDATA%\Muslim Home` to avoid UAC prompts.
+
+</details>
