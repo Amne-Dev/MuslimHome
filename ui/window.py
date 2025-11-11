@@ -686,6 +686,8 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
 
                 #PrayerWindow {
                     background-color: #0b1628;
+                    background-image: radial-gradient(circle at 15% 20%, rgba(56, 208, 165, 0.08), transparent 55%),
+                                      radial-gradient(circle at 85% 10%, rgba(37, 99, 235, 0.12), transparent 65%);
                 }
 
                 #NavBar {
@@ -693,6 +695,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                     border-radius: 24px;
                     border: 1px solid #1f2f46;
                     padding: 16px 12px;
+                    box-shadow: 0 18px 32px rgba(9, 16, 32, 0.55);
                 }
 
                 QWidget#NavActions {
@@ -738,6 +741,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                     background-color: #13243d;
                     border-radius: 20px;
                     border: 1px solid #1f3452;
+                    box-shadow: 0 20px 40px rgba(9, 16, 32, 0.45);
                 }
 
                 QLabel#homeCardTitle {
@@ -825,6 +829,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                     border-radius: 16px;
                     border: 1px solid #1f3452;
                     padding: 18px;
+                    box-shadow: 0 18px 28px rgba(9, 16, 32, 0.35);
                 }
 
                 QFrame#prayerCard[state="active"] {
@@ -1010,6 +1015,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                     color: #f1f5ff;
                     font-size: 18px;
                     line-height: 1.6;
+                    box-shadow: inset 0 0 0 1px rgba(21, 128, 61, 0.18), 0 20px 40px rgba(9, 16, 32, 0.45);
                 }
                 """
             ).strip()
@@ -1021,7 +1027,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
             }
 
             #PrayerWindow {
-                background-color: #f5f6fa;
+                background: radial-gradient(circle at 18% 15%, #f0fdf4 0%, #f5f6fa 55%, #f0f9ff 120%);
             }
 
             #NavBar {
@@ -1029,6 +1035,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 border-radius: 24px;
                 border: 1px solid #bbf7d0;
                 padding: 16px 12px;
+                box-shadow: 0 20px 35px rgba(15, 52, 26, 0.12);
             }
 
             QWidget#NavActions {
@@ -1074,6 +1081,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 background-color: #ffffff;
                 border-radius: 20px;
                 border: 1px solid #bbf7d0;
+                box-shadow: 0 18px 32px rgba(13, 148, 136, 0.08);
             }
 
             QLabel#homeCardTitle {
@@ -1161,6 +1169,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 border-radius: 16px;
                 border: 1px solid #bbf7d0;
                 padding: 18px;
+                box-shadow: 0 16px 28px rgba(21, 128, 61, 0.12);
             }
 
             QFrame#prayerCard[state="active"] {
@@ -1346,6 +1355,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 color: #0f172a;
                 font-size: 18px;
                 line-height: 1.6;
+                box-shadow: inset 0 0 0 1px rgba(21, 128, 61, 0.08), 0 24px 48px rgba(21, 128, 61, 0.08);
             }
             """
         ).strip()

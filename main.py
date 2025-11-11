@@ -46,7 +46,7 @@ from prayer_times import (
 )
 from scheduler import PrayerScheduler
 from location_catalog import LocationCatalog
-from ui import PrayerTimesWindow, SettingsDialog
+from ui import PrayerTimesWindow, SettingsDialog, WelcomeDialog
 from ui.quran import SURAH_DATA
 from weather import WeatherInfo, WeatherService, DailyForecast
 
@@ -149,6 +149,9 @@ class PrayerApp(QtWidgets.QApplication):
 
         LOGGER.debug("Loaded config keys: %s", list(self._config.keys()))
         LOGGER.debug("Languages available: %s", list(self._translations.keys()))
+
+        if not bool(self._config.get("onboarding_complete")):
+            self._run_onboarding_flow()
 
         self.current_language = str(self._config.get("language", "en"))
         self.current_prayer_day: Optional[PrayerDay] = None
@@ -850,6 +853,50 @@ class PrayerApp(QtWidgets.QApplication):
                 LOGGER.warning("Failed to load bundled Ubuntu font asset")
         else:
             LOGGER.info("Ubuntu font not found in assets; falling back to system default")
+
+    def _run_onboarding_flow(self) -> None:
+        language_options = self._language_options()
+        theme_preview = self._resolve_theme_choice(self._config.get("theme"))
+        dialog = WelcomeDialog(None, self._translations, language_options, self.location_catalog, theme=theme_preview)
+        result = dialog.exec()
+        if result != QtWidgets.QDialog.Accepted:
+            raise SystemExit(0)
+
+        payload = dialog.values()
+        language = str(payload.get("language") or "en")
+        auto_location = bool(payload.get("auto_location", True))
+        location_payload = payload.get("location") or {}
+
+        self._config["language"] = language
+        self._config["auto_location"] = auto_location
+
+        if auto_location:
+            self._config.pop("location", None)
+        else:
+            city = str(location_payload.get("city") or "").strip()
+            country = str(location_payload.get("country") or "").strip()
+            if city and country:
+                latitude = self._parse_optional_float(location_payload.get("latitude"))
+                longitude = self._parse_optional_float(location_payload.get("longitude"))
+                timezone = self._system_timezone()
+                self._config.setdefault("location", {})
+                self._config["location"].update(
+                    {
+                        "city": city,
+                        "country": country,
+                        "latitude": latitude,
+                        "longitude": longitude,
+                        "timezone": timezone,
+                    }
+                )
+                country_code = location_payload.get("country_code")
+                if country_code:
+                    self._config["location"]["country_code"] = country_code
+            else:
+                self._config.pop("location", None)
+
+        self._config["onboarding_complete"] = True
+        self._save_json(CONFIG_PATH, self._config)
 
     def _language_options(self) -> List[Tuple[str, str]]:
         options: List[Tuple[str, str]] = []

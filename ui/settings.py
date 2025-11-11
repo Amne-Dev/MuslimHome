@@ -139,6 +139,12 @@ class SettingsDialog(QtWidgets.QDialog):
         audio_group.setLayout(audio_layout)
         layout.addWidget(audio_group)
 
+        self.footer_link = QtWidgets.QLabel("<a href='https://github.com/amne-dev'>@amne-dev on GitHub</a>")
+        self.footer_link.setObjectName("settingsFooter")
+        self.footer_link.setAlignment(QtCore.Qt.AlignCenter)
+        self.footer_link.setOpenExternalLinks(True)
+        layout.addWidget(self.footer_link)
+
         buttons = QtWidgets.QDialogButtonBox()
         save_label = translations.get("save", "Save")
         cancel_label = translations.get("cancel", "Cancel")
@@ -387,8 +393,12 @@ class SettingsDialog(QtWidgets.QDialog):
                 }
                 """
             )
+            if hasattr(self, "footer_link"):
+                self.footer_link.setStyleSheet("color: #38d0a5; padding-top: 6px;")
         else:
             self.setStyleSheet("")
+            if hasattr(self, "footer_link"):
+                self.footer_link.setStyleSheet("color: #15803d; padding-top: 6px;")
 
     def _refresh_countries(self) -> None:
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)

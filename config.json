@@ -1,15 +1,7 @@
 {
-  "language": "en",
+  "language": "ar",
   "theme": "light",
-  "auto_location": false,
-  "location": {
-    "city": "Meknes",
-    "country": "Morocco",
-    "latitude": 33.895,
-    "longitude": -5.5547,
-    "timezone": "Africa/Casablanca",
-    "country_code": "MA"
-  },
+  "auto_location": true,
   "launch_on_startup": false,
   "adhan": {
     "full_prayer": "assets/adhan_full.mp3",
@@ -27,8 +19,17 @@
     "school": 0
   },
   "quran_bookmark": {
-    "surah": 1,
-    "surah_name": "Al-Fatiha",
-    "ayah": 1
+    "surah": 24,
+    "ayah": 50,
+    "surah_name": "An-Nur",
+    "surah_name_ar": "\u0627\u0644\u0646\u0648\u0631"
+  },
+  "onboarding_complete": true,
+  "location": {
+    "city": "Tangier",
+    "country": "MA",
+    "latitude": 35.7673,
+    "longitude": -5.7998,
+    "timezone": "Africa/Casablanca"
   }
 }
