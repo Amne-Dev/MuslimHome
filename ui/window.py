@@ -1,8 +1,11 @@
 """Main window for the prayer times application."""
 from __future__ import annotations
 
+import textwrap
 from datetime import datetime
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
+
+ACCENT_COLOR_HEX = "#15803d"
 
 try:  # Prefer PyQt5, fall back to Qt for Python
     from PyQt5 import QtCore, QtGui, QtWidgets  # type: ignore
@@ -13,6 +16,9 @@ except Exception:  # pragma: no cover - fallback path
         from PySide6 import QtCore, QtGui, QtWidgets  # type: ignore
 
 from prayer_times import PrayerInfo
+from weather import DailyForecast, WeatherInfo
+from ui.home import HomePage
+from ui.weather import WeatherTab
 
 
 class PrayerTimesWindow(QtWidgets.QMainWindow):
@@ -29,18 +35,224 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
         self._gregorian_display: str = ""
         self._prayer_info: Dict[str, PrayerInfo] = {}
         self._active_prayer: Optional[str] = None
+        self._last_countdown_display: Optional[str] = None
 
         self.setObjectName("PrayerWindow")
         self.setWindowTitle("Prayer Times")
         self.setAttribute(QtCore.Qt.WA_StyledBackground, True)
-        self.resize(500, 620)
+        self.resize(1280, 720)
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
 
-        outer_layout = QtWidgets.QVBoxLayout(central)
-        outer_layout.setContentsMargins(24, 24, 24, 24)
-        outer_layout.setSpacing(20)
+        root_layout = QtWidgets.QHBoxLayout(central)
+        root_layout.setContentsMargins(24, 24, 24, 24)
+        root_layout.setSpacing(24)
+
+        # navigation (placed on the left as a vertical rail)
+        self._nav_group = QtWidgets.QButtonGroup(self)
+        self._nav_group.setExclusive(True)
+        self._nav_buttons: Dict[int, QtWidgets.QToolButton] = {}
+        self._nav_items: Dict[int, tuple[str, str, str]] = {}
+        self._accent_color = QtGui.QColor(ACCENT_COLOR_HEX)
+        self._theme: str = "light"
+
+        # main content container
+        self.content_container = QtWidgets.QWidget()
+        self.content_container.setObjectName("ContentContainer")
+        content_layout = QtWidgets.QVBoxLayout(self.content_container)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(16)
+
+        # pages stack
+        self.page_stack = QtWidgets.QStackedWidget()
+        content_layout.addWidget(self.page_stack, stretch=1)
+
+        self.home_page = self._build_home_page()
+        self.prayer_page = self._build_prayer_page()
+        self.weather_tab = WeatherTab()
+
+        self.page_stack.addWidget(self.home_page)
+        self.page_stack.addWidget(self.prayer_page)
+        self.page_stack.addWidget(self.weather_tab)
+        self._set_active_page(0)
+
+        self.status_label = QtWidgets.QLabel()
+        self.status_label.setObjectName("statusLabel")
+        self.status_label.setWordWrap(True)
+        content_layout.addWidget(self.status_label)
+
+        # prayer cards
+        self.prayer_cards: Dict[str, Dict[str, Any]] = {}
+        self._display_order: List[str] = []
+        self._build_default_cards()
+
+        # assemble layouts
+        self.nav_bar = self._build_nav_bar()
+        root_layout.addWidget(self.nav_bar, alignment=QtCore.Qt.AlignTop)
+        root_layout.addWidget(self.content_container, stretch=1)
+
+        # wiring
+        self.refresh_button.clicked.connect(self._emit_refresh)  # type: ignore
+        self.language_button.clicked.connect(self._emit_language_toggle)  # type: ignore
+        self.settings_button.clicked.connect(self._emit_open_settings)  # type: ignore
+
+        self._refresh_handler: Optional[Callable[[], None]] = None
+        self._language_handler: Optional[Callable[[], None]] = None
+        self._settings_handler: Optional[Callable[[], None]] = None
+
+        self.apply_theme("light")
+
+    # -- Builders -----------------------------------------------------------
+    def _build_nav_bar(self) -> QtWidgets.QWidget:
+        bar = QtWidgets.QFrame()
+        bar.setObjectName("NavBar")
+        bar.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Expanding)
+        bar.setFixedWidth(160)
+
+        layout = QtWidgets.QVBoxLayout(bar)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(16)
+
+        buttons = [
+            (0, "nav_home", "Home", "home"),
+            (1, "nav_prayers", "Prayers", "prayers"),
+            (2, "nav_weather", "Weather", "weather"),
+        ]
+
+        for index, translation_key, fallback, kind in buttons:
+            button = QtWidgets.QToolButton()
+            button.setCheckable(True)
+            button.setAutoExclusive(True)
+            button.setToolButtonStyle(QtCore.Qt.ToolButtonTextUnderIcon)
+            button.setIconSize(QtCore.QSize(40, 40))
+            button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+            button.setMinimumHeight(110)
+            button.setObjectName("NavButton")
+            button.setCursor(QtCore.Qt.PointingHandCursor)
+            button.clicked.connect(lambda checked, idx=index: self._set_active_page(idx))  # type: ignore
+
+            self._nav_group.addButton(button, index)
+            self._nav_buttons[index] = button
+            self._nav_items[index] = (translation_key, fallback, kind)
+
+            label = self.translations.get(translation_key, fallback)
+            button.setText(label)
+
+            icon = self._glyph_icon_for_nav(kind)
+            if not icon.isNull():
+                button.setIcon(icon)
+
+            layout.addWidget(button)
+
+        layout.addStretch(1)
+
+        action_widget = QtWidgets.QWidget()
+        action_widget.setObjectName("NavActions")
+        action_layout = QtWidgets.QVBoxLayout(action_widget)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(12)
+
+        self.refresh_button = QtWidgets.QPushButton()
+        self.refresh_button.setObjectName("PrimaryButton")
+        self.refresh_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.refresh_button.setMinimumHeight(44)
+        self.refresh_button.setCursor(QtCore.Qt.PointingHandCursor)
+        refresh_icon = self._create_glyph_icon("\u21bb", QtGui.QColor("#ffffff"), 28)
+        self.refresh_button.setIcon(refresh_icon)
+        self.refresh_button.setIconSize(QtCore.QSize(28, 28))
+        self.refresh_button.setText("")
+        action_layout.addWidget(self.refresh_button)
+
+        self.settings_button = QtWidgets.QPushButton()
+        self.settings_button.setObjectName("SecondaryButton")
+        self.settings_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.settings_button.setMinimumHeight(44)
+        self.settings_button.setCursor(QtCore.Qt.PointingHandCursor)
+        settings_icon = self._create_glyph_icon("\u2699", self._accent_color, 26)
+        self.settings_button.setIcon(settings_icon)
+        self.settings_button.setIconSize(QtCore.QSize(26, 26))
+        self.settings_button.setText("")
+        action_layout.addWidget(self.settings_button)
+
+        self.language_button = QtWidgets.QPushButton(
+            self.translations.get("language_toggle", "Language")
+        )
+        self.language_button.setObjectName("GhostButton")
+        self.language_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.language_button.setMinimumHeight(44)
+        self.language_button.setCursor(QtCore.Qt.PointingHandCursor)
+        action_layout.addWidget(self.language_button)
+
+        layout.addWidget(action_widget)
+        self._update_action_icons()
+        return bar
+
+    def _glyph_icon_for_nav(self, kind: str, color: Optional[QtGui.QColor] = None) -> QtGui.QIcon:
+        glyphs = {"home": "\u2302", "prayers": "\u262a", "weather": "\u2601"}
+        glyph = glyphs.get(kind, "")
+        if not glyph:
+            return QtGui.QIcon()
+
+        size = QtCore.QSize(48, 48)
+        pixmap = QtGui.QPixmap(size)
+        pixmap.fill(QtCore.Qt.transparent)
+
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setPen(QtGui.QPen(color or self._accent_color))
+        font = QtGui.QFont("Segoe UI Symbol", 28)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), QtCore.Qt.AlignCenter, glyph)
+        painter.end()
+
+        icon = QtGui.QIcon()
+        icon.addPixmap(pixmap, QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        # make checked state white glyph on accent background by painting glyph white
+        pixmap_on = QtGui.QPixmap(size)
+        pixmap_on.fill(QtCore.Qt.transparent)
+        painter = QtGui.QPainter(pixmap_on)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.fillRect(pixmap_on.rect(), self._accent_color)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#ffffff")))
+        painter.setFont(font)
+        painter.drawText(pixmap_on.rect(), QtCore.Qt.AlignCenter, glyph)
+        painter.end()
+        icon.addPixmap(pixmap_on, QtGui.QIcon.Normal, QtGui.QIcon.On)
+        return icon
+
+    def _create_glyph_icon(self, glyph: str, color: QtGui.QColor, size: int = 28) -> QtGui.QIcon:
+        icon_size = max(size, 24)
+        dimension = icon_size + 12
+        pixmap = QtGui.QPixmap(dimension, dimension)
+        pixmap.fill(QtCore.Qt.transparent)
+
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setPen(QtGui.QPen(color))
+        font = QtGui.QFont("Segoe UI Symbol", icon_size)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), QtCore.Qt.AlignCenter, glyph)
+        painter.end()
+
+        icon = QtGui.QIcon()
+        icon.addPixmap(pixmap)
+        return icon
+
+    def _build_home_page(self) -> HomePage:
+        page = HomePage()
+        page.setObjectName("HomePage")
+        return page
+
+    def _build_prayer_page(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        page.setObjectName("PrayerPage")
+
+        outer_layout = QtWidgets.QVBoxLayout(page)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(16)
 
         self.location_label = QtWidgets.QLabel()
         self.location_label.setObjectName("locationLabel")
@@ -55,10 +267,30 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
         self.date_label.setWordWrap(True)
         outer_layout.addWidget(self.date_label)
 
-        self.hijri_label = QtWidgets.QLabel()
+        hijri_card = QtWidgets.QFrame()
+        hijri_card.setObjectName("hijriCard")
+        hijri_layout = QtWidgets.QVBoxLayout(hijri_card)
+        hijri_layout.setContentsMargins(18, 18, 18, 18)
+        hijri_layout.setSpacing(6)
+
+        self.hijri_title_label = QtWidgets.QLabel("Hijri Date")
+        self.hijri_title_label.setObjectName("hijriTitle")
+        title_font = self.hijri_title_label.font()
+        title_font.setPointSize(12)
+        title_font.setBold(True)
+        self.hijri_title_label.setFont(title_font)
+
+        self.hijri_label = QtWidgets.QLabel("--")
         self.hijri_label.setObjectName("hijriLabel")
+        hijri_font = self.hijri_label.font()
+        hijri_font.setPointSize(16)
+        hijri_font.setBold(True)
+        self.hijri_label.setFont(hijri_font)
         self.hijri_label.setWordWrap(True)
-        outer_layout.addWidget(self.hijri_label)
+
+        hijri_layout.addWidget(self.hijri_title_label)
+        hijri_layout.addWidget(self.hijri_label)
+        outer_layout.addWidget(hijri_card)
 
         self.next_prayer_label = QtWidgets.QLabel()
         self.next_prayer_label.setObjectName("nextPrayerLabel")
@@ -80,44 +312,14 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
         self.prayer_container.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
         outer_layout.addWidget(self.prayer_container)
 
-        button_row = QtWidgets.QHBoxLayout()
-        button_row.setSpacing(12)
+        outer_layout.addStretch(1)
+        return page
 
-        self.refresh_button = QtWidgets.QPushButton("Refresh")
-        self.refresh_button.setObjectName("PrimaryButton")
-        button_row.addWidget(self.refresh_button)
-
-        self.settings_button = QtWidgets.QPushButton("Settings")
-        self.settings_button.setObjectName("SecondaryButton")
-        button_row.addWidget(self.settings_button)
-
-        self.language_button = QtWidgets.QPushButton("العربية")
-        self.language_button.setObjectName("GhostButton")
-        button_row.addWidget(self.language_button)
-
-        button_row.addStretch()
-        outer_layout.addLayout(button_row)
-
-        self.status_label = QtWidgets.QLabel()
-        self.status_label.setObjectName("statusLabel")
-        self.status_label.setWordWrap(True)
-        outer_layout.addWidget(self.status_label)
-
-        outer_layout.addStretch()
-
-        self.prayer_cards: Dict[str, Dict[str, Any]] = {}
-        self._display_order: List[str] = []
-        self._build_default_cards()
-
-        self.refresh_button.clicked.connect(self._emit_refresh)  # type: ignore
-        self.language_button.clicked.connect(self._emit_language_toggle)  # type: ignore
-        self.settings_button.clicked.connect(self._emit_open_settings)  # type: ignore
-
-        self._refresh_handler: Optional[Callable[[], None]] = None
-        self._language_handler: Optional[Callable[[], None]] = None
-        self._settings_handler: Optional[Callable[[], None]] = None
-
-        self._apply_styles()
+    def _set_active_page(self, index: int) -> None:
+        self.page_stack.setCurrentIndex(index)
+        button = self._nav_buttons.get(index)
+        if button and not button.isChecked():
+            button.setChecked(True)
 
     # -- Event handler wiring -------------------------------------------------
     def on_refresh(self, handler: Callable[[], None]) -> None:
@@ -152,9 +354,36 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
         self.prayer_name_map = prayer_name_map
 
         self.setWindowTitle(translations.get("app_title", "Prayer Times"))
-        self.refresh_button.setText(translations.get("refresh", "Refresh"))
-        self.language_button.setText(translations.get("language_toggle", "Language"))
-        self.settings_button.setText(translations.get("settings_button", "Settings"))
+
+        refresh_text = translations.get("refresh", "Refresh")
+        self.refresh_button.setToolTip(refresh_text)
+        self.refresh_button.setAccessibleName(refresh_text)
+        self.refresh_button.setStatusTip(refresh_text)
+        self.refresh_button.setText("")
+
+        settings_text = translations.get("settings_button", "Settings")
+        self.settings_button.setToolTip(settings_text)
+        self.settings_button.setAccessibleName(settings_text)
+        self.settings_button.setStatusTip(settings_text)
+        self.settings_button.setText("")
+
+        language_text = translations.get("language_toggle", "Language")
+        self.language_button.setText(language_text)
+        self.language_button.setToolTip(language_text)
+        self.language_button.setAccessibleName(language_text)
+        self.home_page.apply_translations(translations)
+        self.weather_tab.apply_translations(translations)
+
+        fallback_overrides = {
+            1: translations.get("prayer_tab_title", "Prayers"),
+            2: translations.get("weather_tab_title", "Weather"),
+        }
+        for index, (translation_key, fallback, _) in self._nav_items.items():
+            button = self._nav_buttons.get(index)
+            if not button:
+                continue
+            default_text = fallback_overrides.get(index, fallback)
+            button.setText(translations.get(translation_key, default_text))
 
         if self._location_set:
             self.update_location(*self._last_location)
@@ -166,12 +395,17 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
         else:
             self.date_label.setText(translations.get("today_label", "Today"))
 
+        self.hijri_title_label.setText(translations.get("hijri_label", "Hijri Date"))
         if self._hijri_display:
-            self.update_hijri_date(self._hijri_display)
+            self.hijri_label.setText(self._hijri_display)
         else:
-            self.hijri_label.setText(translations.get("hijri_label", "Hijri Date"))
+            self.hijri_label.setText("--")
 
-        self.next_prayer_label.setText(translations.get("next_prayer", "Next Prayer"))
+        next_prayer_label = translations.get("next_prayer", "Next Prayer")
+        if self._active_prayer and self._last_countdown_display is not None:
+            self.update_next_prayer(self._active_prayer, self._last_countdown_display)
+        else:
+            self.next_prayer_label.setText(next_prayer_label)
 
         for name, card in self.prayer_cards.items():
             card["name"].setText(self.prayer_name_map.get(name, name))
@@ -192,8 +426,7 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
 
     def update_hijri_date(self, hijri_date: str) -> None:
         self._hijri_display = hijri_date
-        label = self.translations.get("hijri_label", "Hijri Date")
-        self.hijri_label.setText(f"{label}: {hijri_date}")
+        self.hijri_label.setText(hijri_date)
 
     def update_gregorian_date(self, gregorian_date: str) -> None:
         self._gregorian_display = gregorian_date
@@ -227,19 +460,36 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
         reference_time: Optional[datetime] = None,
     ) -> None:
         label = self.translations.get("next_prayer", "Next Prayer")
+        localized_name = self.prayer_name_map.get(prayer_name, prayer_name) if prayer_name else None
         if prayer_name and countdown_text:
-            localized_name = self.prayer_name_map.get(prayer_name, prayer_name)
             until_text = self.translations.get("until", "in")
             self.next_prayer_label.setText(f"{label}: {localized_name} {until_text} {countdown_text}")
         else:
             self.next_prayer_label.setText(label)
 
+        self._last_countdown_display = countdown_text
         self._active_prayer = prayer_name
         self._highlight_prayer(prayer_name)
         self._update_prayer_countdowns(reference_time)
 
+        prayer_time_text = None
+        if prayer_name and prayer_name in self._prayer_info:
+            prayer_time_text = self._prayer_info[prayer_name].time.strftime("%H:%M")
+
+        self.home_page.update_next_prayer(localized_name, prayer_time_text, countdown_text)
+
     def set_status(self, text: str) -> None:
         self.status_label.setText(text)
+
+    def update_weather(
+        self,
+        location_label: str,
+        weather: Optional[WeatherInfo],
+        forecast: Sequence[DailyForecast],
+    ) -> None:
+        self.weather_tab.update_weather(location_label, weather)
+        self.weather_tab.update_forecast(forecast)
+        self.home_page.update_weather(location_label, weather)
 
     def _set_layout_direction(self, rtl: bool) -> None:
         if rtl == self._is_rtl:
@@ -360,8 +610,267 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 prefix = self.translations.get("until", "in")
                 countdown_label.setText(f"{prefix} {chunk}")
 
-    def _apply_styles(self) -> None:
-        self.setStyleSheet(
+    def apply_theme(self, theme: str) -> None:
+        """Apply the selected theme stylesheet and refresh glyph colors."""
+        if theme not in {"light", "dark"}:
+            theme = "light"
+        self._theme = theme
+        self.setStyleSheet(self._stylesheet_for_theme(theme))
+        self._update_action_icons()
+
+    def _update_action_icons(self) -> None:
+        """Refresh action button glyphs so they stay legible per theme."""
+        if not hasattr(self, "refresh_button"):
+            return
+
+        nav_color = self._accent_color if self._theme == "light" else QtGui.QColor("#86efac")
+        for index, button in self._nav_buttons.items():
+            _, _, kind = self._nav_items.get(index, ("", "", ""))
+            if not kind:
+                continue
+            button.setIcon(self._glyph_icon_for_nav(kind, nav_color))
+
+        refresh_color = QtGui.QColor("#ffffff") if self._theme == "light" else QtGui.QColor("#f8fafc")
+        self.refresh_button.setIcon(self._create_glyph_icon("\u21bb", refresh_color, 28))
+
+        settings_color = self._accent_color if self._theme == "light" else QtGui.QColor("#86efac")
+        self.settings_button.setIcon(self._create_glyph_icon("\u2699", settings_color, 26))
+
+    def _stylesheet_for_theme(self, theme: str) -> str:
+        if theme == "dark":
+            return textwrap.dedent(
+                """
+                QWidget {
+                    font-family: 'Ubuntu', 'Segoe UI', sans-serif;
+                    color: #e2e8f0;
+                }
+
+                #PrayerWindow {
+                    background-color: #0f172a;
+                }
+
+                #NavBar {
+                    background-color: #152238;
+                    border-radius: 24px;
+                    border: 1px solid #1f3f2b;
+                    padding: 16px 12px;
+                }
+
+                QWidget#NavActions {
+                    border-top: 1px solid #1f3f2b;
+                    margin-top: 12px;
+                    padding-top: 16px;
+                }
+
+                QToolButton#NavButton {
+                    color: #e2e8f0;
+                    font-weight: 600;
+                    padding: 12px 6px;
+                    margin: 4px 0;
+                    border-radius: 16px;
+                    background-color: transparent;
+                }
+
+                QToolButton#NavButton:hover {
+                    background-color: #243447;
+                }
+
+                QToolButton#NavButton:checked {
+                    background-color: #15803d;
+                    color: #ffffff;
+                    border: none;
+                }
+
+                QLabel#locationLabel {
+                    color: #f8fafc;
+                }
+
+                QLabel#dateLabel, QLabel#hijriLabel, QLabel#statusLabel, QLabel#observedAtLabel {
+                    color: #cbd5f5;
+                    font-size: 13px;
+                }
+
+                QLabel#nextPrayerLabel {
+                    color: #d1fae5;
+                    font-size: 14px;
+                }
+
+                QFrame#homeCard {
+                    background-color: #152238;
+                    border-radius: 20px;
+                    border: 1px solid #1f3f2b;
+                }
+
+                QLabel#homeCardTitle {
+                    color: #34d399;
+                    font-size: 15px;
+                    font-weight: 600;
+                }
+
+                QLabel#homeCardPrimary {
+                    color: #f8fafc;
+                    font-size: 28px;
+                    font-weight: 700;
+                }
+
+                QLabel#homeCardSecondary {
+                    color: #bbf7d0;
+                    font-size: 16px;
+                    font-weight: 600;
+                }
+
+                QLabel#homeCardCaption {
+                    color: #cbd5f5;
+                    font-size: 12px;
+                }
+
+                QPushButton#PrimaryButton {
+                    padding: 10px 20px;
+                    border-radius: 8px;
+                    background-color: #15803d;
+                    color: #f8fafc;
+                    font-weight: 600;
+                }
+
+                QPushButton#PrimaryButton:hover {
+                    background-color: #166534;
+                }
+
+                QPushButton#SecondaryButton {
+                    padding: 10px 20px;
+                    border-radius: 8px;
+                    border: 1px solid #1f3f2b;
+                    background-color: #152238;
+                    color: #e2e8f0;
+                    font-weight: 600;
+                }
+
+                QPushButton#SecondaryButton:hover {
+                    border-color: #34d399;
+                }
+
+                QPushButton#GhostButton {
+                    padding: 10px 18px;
+                    border-radius: 8px;
+                    border: none;
+                    background-color: transparent;
+                    color: #e2e8f0;
+                    font-weight: 600;
+                }
+
+                QPushButton#GhostButton:hover {
+                    background-color: #243447;
+                }
+
+                QFrame#hijriCard {
+                    background-color: #152238;
+                    border-radius: 16px;
+                    border: 1px solid #1f3f2b;
+                    padding: 18px;
+                }
+
+                QLabel#hijriTitle {
+                    color: #22c55e;
+                    font-size: 13px;
+                    font-weight: 600;
+                }
+
+                QLabel#hijriLabel {
+                    color: #f8fafc;
+                    font-size: 20px;
+                    font-weight: 600;
+                }
+
+                QFrame#prayerCard {
+                    background-color: #152238;
+                    border-radius: 16px;
+                    border: 1px solid #1f3f2b;
+                    padding: 18px;
+                }
+
+                QFrame#prayerCard[state="active"] {
+                    border-color: #15803d;
+                    box-shadow: 0px 8px 18px rgba(34, 197, 94, 0.45);
+                }
+
+                QLabel#prayerName {
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: #e2e8f0;
+                }
+
+                QLabel#prayerName[active="true"] {
+                    color: #f8fafc;
+                }
+
+                QLabel#prayerTime {
+                    font-size: 32px;
+                    color: #f8fafc;
+                    font-weight: 600;
+                }
+
+                QLabel#prayerCountdown {
+                    color: #cbd5f5;
+                    font-size: 12px;
+                }
+
+                QScrollArea#forecastArea {
+                    background-color: transparent;
+                    border: none;
+                }
+
+                QWidget#forecastContainer {
+                    background-color: transparent;
+                }
+
+                QFrame#forecastCard {
+                    background-color: #152238;
+                    border-radius: 20px;
+                    border: 1px solid #1f3f2b;
+                }
+
+                QFrame#forecastCard:hover {
+                    border-color: #34d399;
+                    box-shadow: 0px 8px 18px rgba(34, 197, 94, 0.45);
+                }
+
+                QLabel#forecastIcon {
+                    background-color: #243447;
+                    border-radius: 24px;
+                    padding: 8px;
+                }
+
+                QLabel#forecastDay {
+                    color: #d1fae5;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+
+                QLabel#forecastCondition {
+                    color: #cbd5f5;
+                    font-size: 12px;
+                }
+
+                QLabel#forecastTemps {
+                    color: #f8fafc;
+                    font-size: 16px;
+                    font-weight: 600;
+                }
+
+                QLabel#forecastTitle {
+                    color: #e2e8f0;
+                    font-size: 15px;
+                    font-weight: 600;
+                }
+
+                QLabel#forecastPlaceholder {
+                    color: #cbd5f5;
+                    padding: 24px;
+                }
+                """
+            ).strip()
+
+        return textwrap.dedent(
             """
             QWidget {
                 font-family: 'Ubuntu', 'Segoe UI', sans-serif;
@@ -371,43 +880,104 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 background-color: #f5f6fa;
             }
 
+            #NavBar {
+                background-color: #ffffff;
+                border-radius: 24px;
+                border: 1px solid #bbf7d0;
+                padding: 16px 12px;
+            }
+
+            QWidget#NavActions {
+                border-top: 1px solid #bbf7d0;
+                margin-top: 12px;
+                padding-top: 16px;
+            }
+
+            QToolButton#NavButton {
+                color: #14532d;
+                font-weight: 600;
+                padding: 12px 6px;
+                margin: 4px 0;
+                border-radius: 16px;
+                background-color: transparent;
+            }
+
+            QToolButton#NavButton:hover {
+                background-color: #dcfce7;
+            }
+
+            QToolButton#NavButton:checked {
+                background-color: #15803d;
+                color: #ffffff;
+                border: none;
+            }
+
             QLabel#locationLabel {
                 color: #0f172a;
             }
 
-            QLabel#dateLabel, QLabel#hijriLabel, QLabel#statusLabel {
+            QLabel#dateLabel, QLabel#hijriLabel, QLabel#statusLabel, QLabel#observedAtLabel {
                 color: #475569;
                 font-size: 13px;
             }
 
             QLabel#nextPrayerLabel {
-                color: #1e293b;
+                color: #14532d;
                 font-size: 14px;
+            }
+
+            QFrame#homeCard {
+                background-color: #ffffff;
+                border-radius: 20px;
+                border: 1px solid #bbf7d0;
+            }
+
+            QLabel#homeCardTitle {
+                color: #14532d;
+                font-size: 15px;
+                font-weight: 600;
+            }
+
+            QLabel#homeCardPrimary {
+                color: #0f172a;
+                font-size: 28px;
+                font-weight: 700;
+            }
+
+            QLabel#homeCardSecondary {
+                color: #14532d;
+                font-size: 16px;
+                font-weight: 600;
+            }
+
+            QLabel#homeCardCaption {
+                color: #475569;
+                font-size: 12px;
             }
 
             QPushButton#PrimaryButton {
                 padding: 10px 20px;
                 border-radius: 8px;
-                background-color: #1d4ed8;
+                background-color: #15803d;
                 color: #ffffff;
                 font-weight: 600;
             }
 
             QPushButton#PrimaryButton:hover {
-                background-color: #155bcb;
+                background-color: #166534;
             }
 
             QPushButton#SecondaryButton {
                 padding: 10px 20px;
                 border-radius: 8px;
-                border: 1px solid #cbd5e1;
+                border: 1px solid #bbf7d0;
                 background-color: #ffffff;
-                color: #1e293b;
+                color: #14532d;
                 font-weight: 600;
             }
 
             QPushButton#SecondaryButton:hover {
-                border-color: #94a3b8;
+                border-color: #4ade80;
             }
 
             QPushButton#GhostButton {
@@ -415,34 +985,53 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 border-radius: 8px;
                 border: none;
                 background-color: transparent;
-                color: #1e293b;
+                color: #14532d;
                 font-weight: 600;
             }
 
             QPushButton#GhostButton:hover {
-                background-color: #e2e8f0;
+                background-color: #dcfce7;
+            }
+
+            QFrame#hijriCard {
+                background-color: #ffffff;
+                border-radius: 16px;
+                border: 1px solid #bbf7d0;
+                padding: 18px;
+            }
+
+            QLabel#hijriTitle {
+                color: #166534;
+                font-size: 13px;
+                font-weight: 600;
+            }
+
+            QLabel#hijriLabel {
+                color: #052e16;
+                font-size: 20px;
+                font-weight: 600;
             }
 
             QFrame#prayerCard {
                 background-color: #ffffff;
                 border-radius: 16px;
-                border: 1px solid #e2e8f0;
+                border: 1px solid #bbf7d0;
                 padding: 18px;
             }
 
             QFrame#prayerCard[state="active"] {
-                border-color: #1d4ed8;
-                box-shadow: 0px 8px 20px rgba(37, 99, 235, 0.15);
+                border-color: #15803d;
+                box-shadow: 0px 8px 20px rgba(21, 128, 61, 0.18);
             }
 
             QLabel#prayerName {
                 font-size: 16px;
                 font-weight: 600;
-                color: #1e293b;
+                color: #14532d;
             }
 
             QLabel#prayerName[active="true"] {
-                color: #1d4ed8;
+                color: #15803d;
             }
 
             QLabel#prayerTime {
@@ -455,5 +1044,59 @@ class PrayerTimesWindow(QtWidgets.QMainWindow):
                 color: #475569;
                 font-size: 12px;
             }
+
+            QScrollArea#forecastArea {
+                background-color: transparent;
+                border: none;
+            }
+
+            QWidget#forecastContainer {
+                background-color: transparent;
+            }
+
+            QFrame#forecastCard {
+                background-color: #ffffff;
+                border-radius: 20px;
+                border: 1px solid #bbf7d0;
+            }
+
+            QFrame#forecastCard:hover {
+                border-color: #4ade80;
+                box-shadow: 0px 8px 18px rgba(21, 128, 61, 0.18);
+            }
+
+            QLabel#forecastIcon {
+                background-color: #f1f5f9;
+                border-radius: 24px;
+                padding: 8px;
+            }
+
+            QLabel#forecastDay {
+                color: #15803d;
+                font-size: 14px;
+                font-weight: 600;
+            }
+
+            QLabel#forecastCondition {
+                color: #475569;
+                font-size: 12px;
+            }
+
+            QLabel#forecastTemps {
+                color: #14532d;
+                font-size: 16px;
+                font-weight: 600;
+            }
+
+            QLabel#forecastTitle {
+                color: #14532d;
+                font-size: 15px;
+                font-weight: 600;
+            }
+
+            QLabel#forecastPlaceholder {
+                color: #6b7280;
+                padding: 24px;
+            }
             """
-        )
+        ).strip()

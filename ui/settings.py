@@ -55,6 +55,26 @@ class SettingsDialog(QtWidgets.QDialog):
         language_row.addWidget(self.language_combo)
         general_layout.addLayout(language_row)
 
+        theme_row = QtWidgets.QHBoxLayout()
+        theme_label = QtWidgets.QLabel(translations.get("settings_theme_label", "Theme"))
+        theme_row.addWidget(theme_label)
+        theme_row.addStretch()
+        self.theme_combo = QtWidgets.QComboBox()
+        theme_options = [
+            ("system", translations.get("settings_theme_system", "Match system")),
+            ("light", translations.get("settings_theme_light", "Light")),
+            ("dark", translations.get("settings_theme_dark", "Dark")),
+        ]
+        for value, label in theme_options:
+            self.theme_combo.addItem(label, value)
+        current_theme = str(initial.get("theme", "system")).lower()
+        if current_theme not in {"light", "dark", "system"}:
+            current_theme = "system"
+        theme_index = max(0, self.theme_combo.findData(current_theme))
+        self.theme_combo.setCurrentIndex(theme_index)
+        theme_row.addWidget(self.theme_combo)
+        general_layout.addLayout(theme_row)
+
         self.auto_location_checkbox = QtWidgets.QCheckBox(
             translations.get("settings_auto_location", "Detect location automatically")
         )
@@ -129,6 +149,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "auto_location": self.auto_location_checkbox.isChecked(),
             "launch_on_startup": self.launch_on_startup_checkbox.isChecked(),
             "use_short_for": [key for key, box in self.adhan_checkboxes.items() if box.isChecked()],
+            "theme": self.theme_combo.currentData(),
             "location": self._selected_location_payload(),
         }
 

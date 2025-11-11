@@ -1,5 +1,6 @@
 {
-  "language": "en",
+  "language": "ar",
+  "theme": "system",
   "auto_location": false,
   "location": {
     "city": "Meknes",

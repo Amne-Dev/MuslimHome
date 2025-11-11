@@ -13,6 +13,7 @@ A lightweight PyQt-based desktop application for Windows that displays Islamic d
 - System tray icon for quick show/hide, refresh, and startup toggle actions.
 - Optional launch-on-startup setting managed through the tray menu (Windows).
 - Toggle between English and Arabic translations, including RTL layout for Arabic.
+- Switch between light and dark themes or follow the system theme from the Settings dialog.
 
 ## Project Structure
 
@@ -56,6 +57,7 @@ project-root/
 
 - `config.json`
   - `language`: default UI language (`"en"` or `"ar"`).
+- `theme`: preferred color theme (`"light"`, `"dark"`, or `"system"` to follow the OS).
   - `auto_location`: when `true`, the app uses IP-based geolocation each refresh.
   - `launch_on_startup`: enable (`true`) or disable (`false`) registration with Windows startup.
   - `location`: fallback/manual location data (city, country, latitude, longitude, timezone). Only `city` and `country` are required; the rest are optional.

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, time as time_module
@@ -42,6 +43,7 @@ from prayer_times import (
 )
 from scheduler import PrayerScheduler
 from ui import PrayerTimesWindow, SettingsDialog
+from weather import WeatherInfo, WeatherService, DailyForecast
 
 APP_ROOT = Path(__file__).parent
 CONFIG_PATH = APP_ROOT / "config.json"
@@ -145,7 +147,13 @@ class PrayerApp(QtWidgets.QApplication):
         self.current_language = str(self._config.get("language", "en"))
         self.current_prayer_day: Optional[PrayerDay] = None
         self.current_location: Optional[LocationInfo] = build_location_from_config(self._config)
+        self.current_weather: Optional[WeatherInfo] = None
+        self.current_forecast: List[DailyForecast] = []
         self.launch_on_startup = bool(self._config.get("launch_on_startup", False))
+        self.theme_preference = str(self._config.get("theme", "system")).lower()
+        if self.theme_preference not in {"light", "dark", "system"}:
+            self.theme_preference = "system"
+        self.active_theme = ""
         LOGGER.debug(
             "Initial state -> language=%s auto_location=%s manual_location=%s",
             self.current_language,
@@ -163,6 +171,7 @@ class PrayerApp(QtWidgets.QApplication):
         method = int(calc_cfg.get("method", 3))
         school = int(calc_cfg.get("school", 0))
         self.prayer_service = PrayerTimesService(method=method, school=school)
+        self.weather_service = WeatherService()
 
         self.scheduler: Optional[PrayerScheduler] = None
         self.tray_icon: Optional[QtWidgets.QSystemTrayIcon] = None
@@ -174,6 +183,7 @@ class PrayerApp(QtWidgets.QApplication):
         self.tray_quit_action: Optional[QtWidgets.QAction] = None
 
         self.window = PrayerTimesWindow()
+        self._apply_theme_preference(self.theme_preference)
         self.window.on_refresh(self.refresh_prayer_times)
         self.window.on_language_toggle(self.toggle_language)
         self.window.on_settings_open(self.open_settings_dialog)
@@ -197,11 +207,30 @@ class PrayerApp(QtWidgets.QApplication):
         self.window.set_status(strings.get("updating", "Updating prayer times..."))
         LOGGER.debug("Refreshing prayer times (auto_location=%s)", self._config.get("auto_location", True))
 
-        def task() -> PrayerDay:
+        def task() -> Tuple[PrayerDay, Optional[WeatherInfo], List[DailyForecast]]:
             LOGGER.debug("Refresh task started on worker thread")
             location = self._resolve_location()
-            LOGGER.debug("Resolved location for refresh: city=%s country=%s lat=%s lon=%s tz=%s", location.city, location.country, location.latitude, location.longitude, location.timezone)
-            return self.prayer_service.fetch_prayer_times(location)
+            LOGGER.debug(
+                "Resolved location for refresh: city=%s country=%s lat=%s lon=%s tz=%s",
+                location.city,
+                location.country,
+                location.latitude,
+                location.longitude,
+                location.timezone,
+            )
+            prayer_day = self.prayer_service.fetch_prayer_times(location)
+
+            weather_info: Optional[WeatherInfo] = None
+            forecast: List[DailyForecast] = []
+            if location.latitude is not None and location.longitude is not None:
+                try:
+                    weather_info, forecast = self.weather_service.fetch_weather(location.latitude, location.longitude)
+                except Exception:  # pragma: no cover - network failure handled gracefully
+                    LOGGER.warning("Weather fetch failed for location %s, %s", location.city, location.country, exc_info=True)
+            else:
+                LOGGER.debug("Skipping weather fetch due to missing coordinates for location %s, %s", location.city, location.country)
+
+            return prayer_day, weather_info, forecast
 
         self._run_async(task, self._handle_refresh_success, self._handle_refresh_error)
 
@@ -241,9 +270,12 @@ class PrayerApp(QtWidgets.QApplication):
             return self.current_location
         raise RuntimeError("Manual location not configured")
 
-    def _handle_refresh_success(self, prayer_day: PrayerDay) -> None:
+    def _handle_refresh_success(self, result: Tuple[PrayerDay, Optional[WeatherInfo], List[DailyForecast]]) -> None:
+        prayer_day, weather_info, forecast = result
         self.current_prayer_day = prayer_day
         self.current_location = prayer_day.location
+        self.current_weather = weather_info
+        self.current_forecast = forecast or []
 
         strings = self._strings_for_language()
         LOGGER.info(
@@ -541,6 +573,9 @@ class PrayerApp(QtWidgets.QApplication):
         self.window.update_gregorian_date(gregorian_text)
         self.window.update_prayers(prayer_day.prayers)
         self.update_countdown_label()
+        self.window.update_weather(
+            self._weather_location_label(prayer_day.location), self.current_weather, self.current_forecast
+        )
         self.window.repaint()
 
     def _format_gregorian_date(self, day: date) -> str:
@@ -549,6 +584,21 @@ class PrayerApp(QtWidgets.QApplication):
             month = AR_MONTHS[day.month - 1]
             return f"{weekday}، {day.day} {month} {day.year}"
         return day.strftime("%A, %B %d, %Y")
+
+    def _weather_location_label(self, location: Optional[LocationInfo]) -> str:
+        if not location:
+            strings = self._strings_for_language()
+            return strings.get("weather_tab_title", "Weather")
+
+        parts = [part for part in [location.city, location.country] if part]
+        if parts:
+            return ", ".join(parts)
+
+        if location.timezone:
+            return str(location.timezone)
+
+        strings = self._strings_for_language()
+        return strings.get("weather_tab_title", "Weather")
 
     def _load_location_catalog(self) -> List[Dict[str, Any]]:
         if not LOCATIONS_PATH.exists():
@@ -601,6 +651,51 @@ class PrayerApp(QtWidgets.QApplication):
             LOGGER.warning("Falling back to UTC for system timezone resolution")
             return "UTC"
 
+    def _apply_theme_preference(self, preference: Optional[str]) -> None:
+        resolved = self._resolve_theme_choice(preference)
+        if self.active_theme == resolved:
+            return
+        LOGGER.debug("Applying theme preference '%s' resolved to '%s'", preference, resolved)
+        self.active_theme = resolved
+        self.window.apply_theme(resolved)
+
+    def _resolve_theme_choice(self, preference: Optional[str]) -> str:
+        pref = str(preference or "system").lower()
+        if pref not in {"light", "dark", "system"}:
+            pref = "system"
+        if pref == "system":
+            return self._detect_system_theme()
+        return pref
+
+    def _detect_system_theme(self) -> str:
+        if sys.platform.startswith("win") and winreg:
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                ) as key:
+                    value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+                    return "light" if int(value) else "dark"
+            except Exception:
+                LOGGER.debug("Windows theme detection failed; falling back to palette", exc_info=True)
+
+        if sys.platform == "darwin":
+            try:
+                result = subprocess.run(
+                    ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    return "dark"
+            except Exception:
+                LOGGER.debug("macOS theme detection failed; falling back to palette", exc_info=True)
+
+        palette = self.palette()
+        window_color = palette.color(QtGui.QPalette.Window)
+        return "dark" if window_color.lightness() < 128 else "light"
+
     def _register_application_font(self) -> None:
         font_db = QtGui.QFontDatabase()
         if "Ubuntu" in font_db.families():
@@ -646,6 +741,7 @@ class PrayerApp(QtWidgets.QApplication):
                 "auto_location": self._config.get("auto_location", True),
                 "launch_on_startup": self.launch_on_startup,
                 "use_short_for": list(self.use_short_for),
+                "theme": self.theme_preference,
                 "location": initial_location_cfg,
             },
             prayer_labels,
@@ -660,6 +756,9 @@ class PrayerApp(QtWidgets.QApplication):
         desired_auto = bool(values.get("auto_location", True))
         desired_startup = bool(values.get("launch_on_startup", False))
         desired_short = set(values.get("use_short_for", []))
+        desired_theme_pref = str(values.get("theme", self.theme_preference or "system")).lower()
+        if desired_theme_pref not in {"light", "dark", "system"}:
+            desired_theme_pref = "system"
         desired_location_cfg = values.get("location") or {}
 
         manual_location_info: Optional[LocationInfo] = None
@@ -716,7 +815,9 @@ class PrayerApp(QtWidgets.QApplication):
         auto_changed = desired_auto != current_auto
         audio_changed = desired_short != self.use_short_for
 
-        if not any([startup_changed, language_changed, auto_changed, audio_changed, location_changed]):
+        theme_changed = desired_theme_pref != self.theme_preference
+
+        if not any([startup_changed, language_changed, auto_changed, audio_changed, location_changed, theme_changed]):
             self.window.set_status(strings.get("settings_saved", "Settings updated."))
             return
 
@@ -752,6 +853,11 @@ class PrayerApp(QtWidgets.QApplication):
                 self._config["language"] = desired_language
                 self._apply_language(desired_language)
                 self._render_current_prayer_day()
+
+            if theme_changed:
+                self.theme_preference = desired_theme_pref
+                self._config["theme"] = desired_theme_pref
+                self._apply_theme_preference(self.theme_preference)
 
             if auto_changed or location_changed:
                 self._config["auto_location"] = desired_auto
